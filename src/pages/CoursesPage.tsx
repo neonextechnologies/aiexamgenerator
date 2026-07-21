@@ -3,7 +3,6 @@ import { BookOpen, Plus, Users, Calendar } from 'lucide-react';
 import { Card, PageHeader, Badge, EmptyState } from '../components/ui';
 import { demoStore } from '../lib/demo-data';
 
-
 export default function CoursesPage() {
   const courses = demoStore.courses;
   return (
