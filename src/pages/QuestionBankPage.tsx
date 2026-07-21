@@ -6,7 +6,6 @@ import { demoStore } from '../lib/demo-data';
 import { truncate, formatRelativeTime } from '../lib/utils';
 import { QUESTION_TYPE_LABELS, BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE } from '../types';
 
-
 export default function QuestionBankPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
