@@ -1,64 +1,64 @@
 # AI Exam Generator
 
-AI-powered exam question generation system for educational institutions. Generate high-quality exam questions from course documents using OpenAI, with support for Bloom's taxonomy, difficulty levels, and a full review workflow.
-
-## Tech Stack
-
-- **Frontend:** React + TypeScript + Vite
-- **Styling:** Tailwind CSS
-- **Backend:** Supabase (PostgreSQL, Auth, Storage, Edge Functions)
-- **AI:** OpenAI API
-- **Icons:** Lucide React
+ระบบสร้างและบริหารข้อสอบด้วยปัญญาประดิษฐ์ (AI Exam Generator) สำหรับสถาบันอุดมศึกษาไทย
 
 ## Features
 
-- Generate exam questions from uploaded course documents
-- Bloom's taxonomy level selection (Remember, Understand, Apply, Analyze, Evaluate, Create)
-- Difficulty level control (Easy, Medium, Hard, Advanced)
-- Multiple question types (Multiple choice, True/False, Essay, Case study, etc.)
-- Question review workflow with reviewer approval/rejection
-- Test blueprint creation with topic-CLO-Bloom mapping
-- Exam assembly with multiple versions and shuffling
-- AI usage analytics and cost tracking
-- Notification system
+- AI-powered question generation from course documents
+- Bloom's Taxonomy alignment (Remember → Create)
+- Multi-format support (MCQ, True/False, Essay, Case Study)
+- Human review workflow with reviewer approval/rejection
+- Test blueprint design with CLO mapping
+- Exam assembly with multiple versions
+- AI usage tracking and cost monitoring
+- Comprehensive reporting and analytics
 - Role-based access (Instructor, Reviewer, Academic Admin, System Admin)
-- Bilingual support (Thai/English)
+- Thai and English language support
 
-## Setup
+## Tech Stack
+
+- **Frontend**: React + TypeScript + Vite + Tailwind CSS
+- **Backend**: Supabase (PostgreSQL + Auth + Storage + Edge Functions)
+- **AI**: OpenAI GPT-4o (with demo fallback)
+- **Charts**: Recharts
+- **Icons**: Lucide React
+
+## Demo Accounts
+
+| Role | Email | Password |
+|------|-------|----------|
+| Instructor | instructor@example.com | demo1234 |
+| Reviewer | reviewer@example.com | demo1234 |
+| Academic Admin | academic@example.com | demo1234 |
+| System Admin | admin@example.com | demo1234 |
+
+## Getting Started
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Database
+## Build
 
-The file `db_export.sql` contains the complete database schema (tables, indexes, RLS policies) and seed data. Run it against your Supabase project to set up the database.
-
-### Seed Users
-
-- instructor@example.com (Instructor)
-- reviewer@example.com (Reviewer)
-- academic@example.com (Academic Admin)
-- admin@example.com (System Admin)
+```bash
+npm run build
+```
 
 ## Project Structure
 
 ```
 src/
-  components/    # Shared UI components
-  lib/           # Utilities, auth, Supabase client, AI provider
-  pages/         # Route-level page components
+  components/    # Reusable UI components (Layout, Card, Badge, etc.)
+  lib/           # Utilities (auth, supabase, AI provider, demo data)
+  pages/         # Page components (16 pages)
   types/         # TypeScript type definitions
 supabase/
   functions/     # Edge functions (extract-document, generate-questions, seed-demo-users)
-  migrations/    # SQL migrations
-db_export.sql   # Full database export
+  migrations/    # SQL migration files
 ```
 
-## Scripts
+## Database
 
-- `npm run dev` - Start dev server
-- `npm run build` - Build for production
-- `npm run lint` - Run ESLint
-- `npm run typecheck` - TypeScript type checking
+See [DATABASE_EXPORT.md](./DATABASE_EXPORT.md) for full schema documentation.
+13 tables with RLS enabled, 3 edge functions, and storage bucket for course documents.
