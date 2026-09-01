@@ -1,33 +1,49 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { Card, PageHeader, Badge, EmptyState, Spinner } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { getCourse, getQuestion, submitReview } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { QUESTION_TYPE_LABELS, BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE } from '../types';
-import type { BloomLevel, DifficultyLevel } from '../types';
+import type { BloomLevel, Course, DifficultyLevel, Question } from '../types';
 
 export default function ReviewDetailPage() {
   const { questionId } = useParams();
   const navigate = useNavigate();
-  const q = demoStore.questions.find(x => x.id === questionId);
+  const { user } = useAuth();
+  const [q, setQuestion] = useState<Question | null>(null);
+  const [course, setCourse] = useState<Course | null>(null);
+  const [loading, setLoading] = useState(true);
   const [decision, setDecision] = useState<'approved'|'rejected'|'revision_requested'>('approved');
   const [comment, setComment] = useState('');
   const [confirmedBloom, setConfirmedBloom] = useState<BloomLevel | ''>('');
   const [confirmedDiff, setConfirmedDiff] = useState<DifficultyLevel | ''>('');
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (!questionId) { setLoading(false); return; }
+    getQuestion(questionId).then(async question => {
+      setQuestion(question);
+      if (question) setCourse(await getCourse(question.course_id));
+    }).finally(() => setLoading(false));
+  }, [questionId]);
+
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   if (!q) return <EmptyState title="ไม่พบข้อสอบ" action={<Link to="/review" className="btn-primary">กลับ</Link>} />;
-  const course = demoStore.courses.find(c => c.id === q.course_id);
 
   const handleSubmit = async () => {
+    if (!user) return;
     setSubmitting(true);
-    await new Promise(r => setTimeout(r, 500));
-    const status = decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'revision_requested';
-    q.status = status;
-    if (decision === 'approved') { q.approved_by = 'u-rev'; q.approved_at = new Date().toISOString(); q.reviewer_confirmed_bloom_level = (confirmedBloom || q.intended_bloom_level) as BloomLevel; q.reviewer_confirmed_difficulty = (confirmedDiff || q.intended_difficulty) as DifficultyLevel; }
-    demoStore.reviews.push({ id: `r-${Date.now()}`, question_id: q.id, reviewer_id: 'u-rev', reviewer_name: 'ดร. สมหญิง รักงาน', decision, comment, confirmed_bloom: (confirmedBloom || null) as BloomLevel | null, confirmed_difficulty: (confirmedDiff || null) as DifficultyLevel | null, created_at: new Date().toISOString() });
-    setSubmitting(false);
-    navigate('/review');
+    try {
+      await submitReview({
+        questionId: q.id, reviewerId: user.id, reviewerName: user.full_name, decision, comment,
+        confirmedBloom: (confirmedBloom || q.intended_bloom_level) as BloomLevel,
+        confirmedDifficulty: (confirmedDiff || q.intended_difficulty) as DifficultyLevel,
+      });
+      navigate('/review');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (

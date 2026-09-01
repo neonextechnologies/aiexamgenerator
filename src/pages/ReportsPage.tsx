@@ -1,14 +1,23 @@
+import { useEffect, useState } from 'react';
 import { TrendingUp, CheckCircle2, XCircle, Activity } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { Card, PageHeader, StatCard } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, PageHeader, StatCard, Spinner } from '../components/ui';
+import { listQuestions, listUsageLogs } from '../lib/api';
 import { BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_TYPE_LABELS, QUESTION_STATUS_LABELS } from '../types';
+import type { AIUsageLog, Question } from '../types';
 
 const COLORS = ['#3b82f6', '#06b6d4', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6'];
 
 export default function ReportsPage() {
-  const questions = demoStore.questions;
-  const usageLogs = demoStore.usageLogs;
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [usageLogs, setUsageLogs] = useState<AIUsageLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    Promise.all([listQuestions(), listUsageLogs()])
+      .then(([questionRows, usageRows]) => { setQuestions(questionRows); setUsageLogs(usageRows); })
+      .finally(() => setLoading(false));
+  }, []);
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
 
   const bloomData = Object.entries(BLOOM_LABELS).map(([k, v]) => ({ name: v, count: questions.filter(q => q.intended_bloom_level === k).length }));
   const diffData = Object.entries(DIFFICULTY_LABELS).map(([k, v]) => ({ name: v, count: questions.filter(q => q.intended_difficulty === k).length }));

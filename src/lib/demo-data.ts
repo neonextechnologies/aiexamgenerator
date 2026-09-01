@@ -3,6 +3,7 @@ import type { Profile, Course, LearningOutcome, CourseTopic, Document, TestBluep
 export const DEMO_PROFILES: Profile[] = [
   { id:'u-inst', email:'instructor@example.com', full_name:'ดร. สมชาย ใจดี', role:'instructor', department:'เทคโนโลยีการศึกษา', created_at:'2025-01-10T08:00:00Z' },
   { id:'u-rev', email:'reviewer@example.com', full_name:'ดร. สมหญิง รักงาน', role:'reviewer', department:'หลักสูตรและการสอน', created_at:'2025-01-10T08:00:00Z' },
+  { id:'u-academic', email:'academic@example.com', full_name:'รศ. ดร. วิภา วิชาการ', role:'academic_admin', department:'สำนักงานวิชาการ', created_at:'2025-01-10T08:00:00Z' },
   { id:'u-admin', email:'admin@example.com', full_name:'ผศ. ดร. อนุชา บริหาร', role:'system_admin', department:'สำนักงานวิชาการ', created_at:'2025-01-10T08:00:00Z' },
 ];
 

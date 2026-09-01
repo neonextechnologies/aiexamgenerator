@@ -1,17 +1,32 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Eye, Download, Copy, Plus } from 'lucide-react';
-import { Card, PageHeader, Badge, Tabs, EmptyState } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, PageHeader, Badge, Tabs, EmptyState, Spinner } from '../components/ui';
+import { getCourse, getExam, listQuestions } from '../lib/api';
 import { QUESTION_TYPE_LABELS, BLOOM_LABELS, DIFFICULTY_LABELS, EXAM_TYPE_LABELS } from '../types';
+import type { Course, Exam, Question } from '../types';
 
 export default function ExamDetailPage() {
   const { examId } = useParams();
   const [tab, setTab] = useState('questions');
-  const exam = demoStore.exams.find(e => e.id === examId);
+  const [exam, setExam] = useState<Exam | null>(null);
+  const [course, setCourse] = useState<Course | null>(null);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (!examId) { setLoading(false); return; }
+    getExam(examId).then(async examRow => {
+      setExam(examRow);
+      if (examRow) {
+        const [courseRow, questionRows] = await Promise.all([getCourse(examRow.course_id), listQuestions({ courseId: examRow.course_id })]);
+        const byId = new Map(questionRows.map(q => [q.id, q]));
+        setCourse(courseRow);
+        setQuestions(examRow.questions.map(eq => byId.get(eq.question_id)).filter((q): q is Question => !!q));
+      }
+    }).finally(() => setLoading(false));
+  }, [examId]);
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   if (!exam) return <EmptyState title="ไม่พบชุดข้อสอบ" action={<Link to="/exams" className="btn-primary">กลับ</Link>} />;
-  const course = demoStore.courses.find(c => c.id === exam.course_id);
-  const questions = exam.questions.map(eq => demoStore.questions.find(q => q.id === eq.question_id)).filter(Boolean);
 
   const tabs = [{ id:'questions', label:'ข้อสอบ', count: questions.length }, { id:'versions', label:'เวอร์ชัน', count: exam.versions.length }, { id:'preview', label:'พรีวิว' }, { id:'settings', label:'ตั้งค่า' }];
 

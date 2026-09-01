@@ -29,6 +29,9 @@ export interface Question {
   marks: number; estimated_answer_time_minutes: number; source_references?: SourceReference[] | null; rubric?: Rubric | null;
   learning_outcome_codes: string[]; quality_flags: string[]; quality_score?: number | null; status: QuestionStatus;
   source_type: 'ai_generated'|'human_written'; created_by: string; generated_by_ai: boolean; ai_model?: string | null;
+  generation_mode?: 'manual'|'hybrid'|'ai' | null; tags?: string[]; notes?: string | null;
+  evidence_ids?: string[]; verification_status?: string | null; verification_score?: number | null;
+  quality_dimensions?: Record<string, number> | null; workflow_run_id?: string | null; content_hash?: string | null;
   approved_by?: string | null; approved_at?: string | null; created_at: string; updated_at: string;
   used_count: number; first_used_at?: string | null; last_used_at?: string | null; exposure_level: ExposureLevel;
 }

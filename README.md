@@ -1,29 +1,40 @@
-# AI Exam Generator
+# AI Exam Generator V2 — Controlled Hybrid Platform
 
-ระบบสร้างและบริหารข้อสอบด้วยปัญญาประดิษฐ์ (AI Exam Generator) สำหรับสถาบันอุดมศึกษาไทย
+ระบบสร้างและบริหารข้อสอบแบบ Controlled Hybrid สำหรับสถาบันอุดมศึกษาไทย
 
-## Features
+AI **ไม่บังคับ** — รองรับ Manual / Hybrid / AI
 
-- AI-powered question generation from course documents
-- Bloom's Taxonomy alignment (Remember → Create)
-- Multi-format support (MCQ, True/False, Essay, Case Study)
-- Human review workflow with reviewer approval/rejection
-- Test blueprint design with CLO mapping
-- Exam assembly with multiple versions
-- AI usage tracking and cost monitoring
-- Comprehensive reporting and analytics
-- Role-based access (Instructor, Reviewer, Academic Admin, System Admin)
-- Thai and English language support
+## Quick start
 
-## Tech Stack
+```bash
+npm install
+npm run setup:local   # Docker Desktop + Supabase + .env
+npm run dev
+```
 
-- **Frontend**: React + TypeScript + Vite + Tailwind CSS
-- **Backend**: Supabase (PostgreSQL + Auth + Storage + Edge Functions)
-- **AI**: OpenAI GPT-4o (with demo fallback)
-- **Charts**: Recharts
-- **Icons**: Lucide React
+Demo (no backend): omit `.env` → in-memory Demo Mode.
 
-## Demo Accounts
+## Modes
+
+| Mode | Path | AI |
+|------|------|----|
+| Manual | `/questions/new` | ไม่เรียก |
+| Hybrid / AI | `/generate` | Orchestrator + Rules + Evidence + Verify |
+
+## Architecture docs
+
+- [docs/V2_CURRENT_STATE.md](./docs/V2_CURRENT_STATE.md)
+- [docs/V2_ARCHITECTURE.md](./docs/V2_ARCHITECTURE.md)
+- [docs/V2_IMPLEMENTATION_PLAN.md](./docs/V2_IMPLEMENTATION_PLAN.md)
+
+## Stack
+
+- React + TypeScript + Vite + Tailwind
+- Supabase (Postgres + Auth + Storage + Edge Functions + pgvector)
+- Providers: Demo, OpenAI, Gemini, Anthropic, OpenAI-Compatible
+- Engines: Knowledge, Rules, Workflow, Analysis, Verification, Orchestrator, Chat
+
+## Demo accounts
 
 | Role | Email | Password |
 |------|-------|----------|
@@ -32,33 +43,40 @@
 | Academic Admin | academic@example.com | demo1234 |
 | System Admin | admin@example.com | demo1234 |
 
-## Getting Started
+## Env
+
+See `.env.example`.
+
+| Variable | Where |
+|----------|--------|
+| `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | Frontend |
+| `OPENAI_API_KEY` | Supabase secrets (optional) |
+| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` / `COMPAT_API_KEY` | Optional providers |
+
+Never put provider secrets in `VITE_*`.
+
+## Scripts
 
 ```bash
-npm install
 npm run dev
-```
-
-## Build
-
-```bash
 npm run build
+npm run typecheck
+npm test
+npm run setup:local
 ```
 
-## Project Structure
+## Key routes
+
+- `/generate` — Controlled wizard (Manual/Hybrid/AI)
+- `/questions/new` — Manual builder
+- `/rules`, `/workflows` — Admin control plane
+- `/settings` — Providers / Knowledge / Email
+- Assistant FAB on app pages
+
+## Principle
 
 ```
-src/
-  components/    # Reusable UI components (Layout, Card, Badge, etc.)
-  lib/           # Utilities (auth, supabase, AI provider, demo data)
-  pages/         # Page components (16 pages)
-  types/         # TypeScript type definitions
-supabase/
-  functions/     # Edge functions (extract-document, generate-questions, seed-demo-users)
-  migrations/    # SQL migration files
+Teacher → Knowledge → CLO → Blueprint → Workflow → Rules
+→ Evidence → Analysis → AI Generation → Verification
+→ Human Review → Question Bank → Exam
 ```
-
-## Database
-
-See [DATABASE_EXPORT.md](./DATABASE_EXPORT.md) for full schema documentation.
-13 tables with RLS enabled, 3 edge functions, and storage bucket for course documents.

@@ -23,19 +23,14 @@ All 13 tables are in the `public` schema with Row Level Security (RLS) enabled.
 
 ## RLS Policy Pattern
 
-All tables use the same pattern (single-tenant demo app with anon + authenticated access):
+Production policies require authenticated users. Role helpers:
 
-```sql
--- 4 policies per table (SELECT, INSERT, UPDATE, DELETE)
-CREATE POLICY "anon_select_<table>" ON <table> FOR SELECT
-  TO anon, authenticated USING (true);
-CREATE POLICY "anon_insert_<table>" ON <table> FOR INSERT
-  TO anon, authenticated WITH CHECK (true);
-CREATE POLICY "anon_update_<table>" ON <table> FOR UPDATE
-  TO anon, authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "anon_delete_<table>" ON <table> FOR DELETE
-  TO anon, authenticated USING (true);
-```
+- `current_user_role()` — reads `profiles.role`
+- `is_staff()` — reviewer / academic_admin / system_admin
+- `is_admin()` — academic_admin / system_admin
+
+Anon has no CRUD on application tables. Storage bucket `course-documents` is authenticated-only.
+Edge functions use the service role for privileged writes after verifying a user JWT.
 
 ## Storage
 

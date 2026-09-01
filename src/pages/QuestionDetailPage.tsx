@@ -1,16 +1,30 @@
+import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Edit, Copy, FileText, AlertCircle, CheckCircle2, XCircle, Clock } from 'lucide-react';
-import { Card, PageHeader, Badge, EmptyState } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, PageHeader, Badge, EmptyState, Spinner } from '../components/ui';
+import { getCourse, getQuestion, listReviews } from '../lib/api';
 import { formatDate, formatRelativeTime } from '../lib/utils';
 import { QUESTION_TYPE_LABELS, BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE } from '../types';
+import type { Course, Question, QuestionReview } from '../types';
 
 export default function QuestionDetailPage() {
   const { questionId } = useParams();
-  const q = demoStore.questions.find(x => x.id === questionId);
+  const [q, setQuestion] = useState<Question | null>(null);
+  const [course, setCourse] = useState<Course | null>(null);
+  const [reviews, setReviews] = useState<QuestionReview[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (!questionId) { setLoading(false); return; }
+    getQuestion(questionId).then(async question => {
+      setQuestion(question);
+      if (question) {
+        const [courseRow, reviewRows] = await Promise.all([getCourse(question.course_id), listReviews(question.id)]);
+        setCourse(courseRow); setReviews(reviewRows);
+      }
+    }).finally(() => setLoading(false));
+  }, [questionId]);
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   if (!q) return <EmptyState title="ไม่พบข้อสอบ" action={<Link to="/question-bank" className="btn-primary">กลับ</Link>} />;
-  const course = demoStore.courses.find(c => c.id === q.course_id);
-  const reviews = demoStore.reviews.filter(r => r.question_id === q.id);
 
   return (
     <div>

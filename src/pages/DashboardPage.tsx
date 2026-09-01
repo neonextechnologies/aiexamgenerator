@@ -1,17 +1,28 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BookOpen, Sparkles, ClipboardCheck, Library, FileCheck, Activity, TrendingUp, AlertCircle, XCircle } from 'lucide-react';
-import { StatCard, Card, PageHeader, Badge } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { StatCard, Card, PageHeader, Badge, Spinner } from '../components/ui';
+import { getDashboardData } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { isDemoMode } from '../lib/supabase';
 import { formatRelativeTime, truncate } from '../lib/utils';
 import { QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE, BLOOM_LABELS } from '../types';
+import type { Course, Question, TestBlueprint, AIUsageLog, QuestionReview, Notification } from '../types';
 
 export default function DashboardPage() {
-  const courses = demoStore.courses;
-  const questions = demoStore.questions;
-  const blueprints = demoStore.blueprints;
-  const usageLogs = demoStore.usageLogs;
-  const reviews = demoStore.reviews;
+  const { user } = useAuth();
+  const [data, setData] = useState<{ courses: Course[]; questions: Question[]; blueprints: TestBlueprint[]; usageLogs: AIUsageLog[]; reviews: QuestionReview[]; notifications: Notification[] } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getDashboardData(user?.id).then(result => { if (active) setData(result); }).catch(() => {
+      if (active) setData({ courses: [], questions: [], blueprints: [], usageLogs: [], reviews: [], notifications: [] });
+    });
+    return () => { active = false; };
+  }, [user?.id]);
+
+  if (!data) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
+  const { courses, questions, blueprints, usageLogs, reviews, notifications } = data;
 
   const pendingReview = questions.filter(q => q.status === 'ready_for_review' || q.status === 'under_review').length;
   const approved = questions.filter(q => q.status === 'approved' || q.status === 'published').length;
@@ -84,7 +95,7 @@ export default function DashboardPage() {
         <Card className="p-5">
           <h3 className="font-semibold text-neutral-900 mb-4">การแจ้งเตือนล่าสุด</h3>
           <div className="space-y-3">
-            {demoStore.notifications.map(n => (
+            {notifications.map(n => (
               <Link key={n.id} to={n.link || '#'} className="block p-3 rounded-lg hover:bg-neutral-50 transition-colors">
                 <div className="flex items-start gap-2">
                   {!n.read && <div className="w-2 h-2 rounded-full bg-primary-500 mt-1.5 flex-shrink-0" />}

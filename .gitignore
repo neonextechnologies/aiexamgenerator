@@ -21,3 +21,8 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.env.local
+.supabase-status.env
+supabase/.temp/
+supabase/.branches/
+

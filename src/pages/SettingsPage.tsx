@@ -1,49 +1,104 @@
-import { Brain, Database, AlertCircle } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Database, Mail, Search } from 'lucide-react';
 import { Card, PageHeader, Badge, Tabs } from '../components/ui';
+import { RulesSettingsPanel } from '../components/settings/RulesSettingsPanel';
+import { WorkflowsSettingsPanel } from '../components/settings/WorkflowsSettingsPanel';
+import { UsageSettingsPanel } from '../components/settings/UsageSettingsPanel';
+import { AIProvidersSettingsPanel } from '../components/settings/AIProvidersSettingsPanel';
 import { useAuth } from '../lib/auth';
 import { isDemoMode } from '../lib/supabase';
+import { demoEmailProvider, knowledgeProvider } from '../services';
 import { ROLE_LABELS } from '../types';
-import { useState } from 'react';
+
+const WIDE_TABS = new Set(['ai', 'rules', 'workflows', 'usage']);
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState('profile');
-  const tabs = [{ id: 'profile', label: 'โปรไฟล์' }, { id: 'ai', label: 'AI Configuration' }, { id: 'system', label: 'System' }];
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isAdmin = user?.role === 'academic_admin' || user?.role === 'system_admin';
+
+  const tabs = useMemo(() => {
+    const items = [
+      { id: 'profile', label: 'โปรไฟล์' },
+      { id: 'ai', label: 'AI Provider' },
+      { id: 'knowledge', label: 'Knowledge' },
+      { id: 'email', label: 'อีเมล' },
+    ];
+    if (isAdmin) {
+      items.push(
+        { id: 'rules', label: 'กฎควบคุม' },
+        { id: 'workflows', label: 'เวิร์กโฟลว์' },
+        { id: 'usage', label: 'AI Usage' },
+      );
+    }
+    items.push({ id: 'system', label: 'ระบบ' });
+    return items;
+  }, [isAdmin]);
+
+  const requestedTab = searchParams.get('tab') || 'profile';
+  const normalizedTab = requestedTab === 'providers' ? 'ai' : requestedTab;
+  const tab = tabs.some(t => t.id === normalizedTab) ? normalizedTab : 'profile';
+
+  const [knowledgeReady, setKnowledgeReady] = useState<boolean | null>(null);
+  const [emailResult, setEmailResult] = useState('');
+  const supabaseConfigured = !isDemoMode;
+
+  useEffect(() => {
+    if (requestedTab !== tab) {
+      setSearchParams({ tab }, { replace: true });
+    }
+  }, [requestedTab, tab, setSearchParams]);
+
+  useEffect(() => {
+    knowledgeProvider.healthCheck().then(setKnowledgeReady).catch(() => setKnowledgeReady(false));
+  }, []);
+
+  const setTab = (nextTab: string) => {
+    setSearchParams({ tab: nextTab }, { replace: true });
+  };
 
   return (
     <div>
       <PageHeader title="ตั้งค่า" description="จัดการบัญชีและการตั้งค่าระบบ" />
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
-      <div className="mt-6 max-w-2xl">
+      <div className={`mt-6 ${WIDE_TABS.has(tab) ? 'max-w-6xl' : 'max-w-2xl'}`}>
         {tab === 'profile' && (
           <Card className="p-5">
             <div className="flex items-center gap-4 mb-6"><div className="w-16 h-16 rounded-full bg-primary-100 flex items-center justify-center text-2xl font-semibold text-primary-700">{user?.full_name?.charAt(0) || 'U'}</div><div><h3 className="font-semibold text-neutral-900">{user?.full_name}</h3><p className="text-sm text-neutral-500">{user?.email}</p><Badge variant="primary">{user ? ROLE_LABELS[user.role] : ''}</Badge></div></div>
             <div className="space-y-3 text-sm"><div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">แผนก</span><span className="font-medium">{user?.department || '-'}</span></div><div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">บัญชีสร้างเมื่อ</span><span className="font-medium">{new Date(user?.created_at || '').toLocaleDateString('th-TH')}</span></div></div>
           </Card>
         )}
-        {tab === 'ai' && (
+        {tab === 'ai' && <AIProvidersSettingsPanel />}
+        {tab === 'knowledge' && (
           <Card className="p-5">
-            <div className="flex items-center gap-2 mb-4"><Brain className="w-5 h-5 text-primary-600" /><h3 className="font-semibold">AI Provider</h3></div>
-            {isDemoMode ? (
-              <div className="p-4 rounded-lg bg-warning-50 border border-warning-200"><div className="flex items-center gap-2"><AlertCircle className="w-4 h-4 text-warning-600" /><p className="text-sm font-medium text-warning-700">Demo AI Mode</p></div><p className="text-xs text-warning-600 mt-2">ระบบใช้ DemoAIProvider ไม่เรียก AI จริง ตั้งค่า OPENAI_API_KEY ใน Bolt Secrets เพื่อใช้ AI จริง</p></div>
-            ) : (<div className="p-4 rounded-lg bg-success-50 border border-success-200"><p className="text-sm font-medium text-success-700">OpenAI Provider Active</p></div>)}
-            <div className="mt-4 space-y-3 text-sm">
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Provider</span><Badge variant={isDemoMode ? 'warning' : 'success'}>{isDemoMode ? 'demo' : 'openai'}</Badge></div>
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Question Model</span><span className="font-mono text-xs">{isDemoMode ? 'demo-model' : 'gpt-4o'}</span></div>
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Max Questions/Request</span><span className="font-medium">30</span></div>
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Daily User Limit</span><span className="font-medium">50</span></div>
-              <div className="flex justify-between py-2"><span className="text-neutral-500">Monthly Budget</span><span className="font-medium">$100</span></div>
+            <div className="flex items-center gap-2 mb-4"><Search className="w-5 h-5 text-primary-600" /><h3 className="font-semibold">Knowledge Provider</h3></div>
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Provider</span><span className="font-medium">{isDemoMode ? 'Lexical Demo Store' : 'Supabase pgvector'}</span></div>
+              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">สถานะ</span><Badge variant={knowledgeReady ? 'success' : knowledgeReady === false ? 'error' : 'neutral'}>{knowledgeReady ? 'Ready' : knowledgeReady === false ? 'Unavailable' : 'Checking'}</Badge></div>
+              <div className="flex justify-between py-2"><span className="text-neutral-500">Knowledge Bounded</span><Badge variant="success">Supported</Badge></div>
             </div>
           </Card>
         )}
+        {tab === 'email' && (
+          <Card className="p-5">
+            <div className="flex items-center gap-2 mb-4"><Mail className="w-5 h-5 text-primary-600" /><h3 className="font-semibold">Email Provider</h3></div>
+            <div className="p-4 rounded-lg bg-warning-50 border border-warning-200"><p className="text-sm font-medium text-warning-700">Demo Email Provider</p><p className="text-xs text-warning-600 mt-1">ผู้ให้บริการนี้บันทึกข้อความลง console เท่านั้นและไม่ส่งอีเมลจริง</p></div>
+            <button className="btn-secondary mt-4" onClick={async () => setEmailResult((await demoEmailProvider.testConnection()).message)}>Test Connection</button>
+            {emailResult && <p className="text-sm text-success-600 mt-3">{emailResult}</p>}
+          </Card>
+        )}
+        {tab === 'rules' && isAdmin && <RulesSettingsPanel />}
+        {tab === 'workflows' && isAdmin && <WorkflowsSettingsPanel />}
+        {tab === 'usage' && isAdmin && <UsageSettingsPanel />}
         {tab === 'system' && (
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-4"><Database className="w-5 h-5 text-primary-600" /><h3 className="font-semibold">System Status</h3></div>
             <div className="space-y-3 text-sm">
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Database</span><Badge variant="success">Connected</Badge></div>
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Authentication</span><Badge variant="success">Active</Badge></div>
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">AI Provider</span><Badge variant={isDemoMode ? 'warning' : 'success'}>{isDemoMode ? 'Demo Mode' : 'Active'}</Badge></div>
-              <div className="flex justify-between py-2"><span className="text-neutral-500">Storage</span><Badge variant="success">Active</Badge></div>
+              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Database</span><Badge variant={supabaseConfigured ? 'success' : 'warning'}>{supabaseConfigured ? 'Connected' : 'Demo (in-memory)'}</Badge></div>
+              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Authentication</span><Badge variant={supabaseConfigured ? 'success' : 'warning'}>{supabaseConfigured ? 'Supabase Auth' : 'Demo login'}</Badge></div>
+              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">AI Provider</span><Badge variant={isDemoMode ? 'warning' : 'success'}>{isDemoMode ? 'Demo Mode' : 'Edge + OpenAI'}</Badge></div>
+              <div className="flex justify-between py-2"><span className="text-neutral-500">Storage</span><Badge variant={supabaseConfigured ? 'success' : 'warning'}>{supabaseConfigured ? 'course-documents' : 'Demo'}</Badge></div>
             </div>
           </Card>
         )}

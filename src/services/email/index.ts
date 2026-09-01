@@ -1,0 +1,1 @@
+export { demoEmailProvider } from '../notifications';

@@ -1,18 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { FileText, Plus, ArrowLeft, Target, Settings, Upload, Trash2, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { Card, Tabs, Badge, PageHeader, EmptyState, Modal } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, Tabs, Badge, PageHeader, EmptyState, Modal, Spinner } from '../components/ui';
+import { getCourse, listLearningOutcomes, listBlueprints, listQuestions, listExams } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fetchCourseDocuments, uploadCourseDocument, deleteCourseDocument } from '../lib/documents';
 import { formatDate, formatBytes, truncate } from '../lib/utils';
 import { BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_TYPE_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE } from '../types';
-import type { Document as DocType } from '../types';
+import type { Course, Document as DocType, LearningOutcome, TestBlueprint, Question, Exam } from '../types';
 
 export default function CourseDetailPage() {
   const { courseId } = useParams();
-  const course = demoStore.courses.find(c => c.id === courseId);
   const { user } = useAuth();
+  const [course, setCourse] = useState<Course | null>(null);
+  const [clos, setClos] = useState<LearningOutcome[]>([]);
+  const [blueprints, setBlueprints] = useState<TestBlueprint[]>([]);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('overview');
   const [docs, setDocs] = useState<DocType[]>([]);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -24,22 +29,28 @@ export default function CourseDetailPage() {
 
   const loadDocs = useCallback(async () => {
     if (!courseId) return;
-    try {
-      const fetched = await fetchCourseDocuments(courseId);
-      setDocs(fetched);
-    } catch {
-      setDocs(demoStore.documents.filter(d => d.course_id === courseId));
-    }
+    setDocs(await fetchCourseDocuments(courseId));
   }, [courseId]);
 
-  useEffect(() => { loadDocs(); }, [loadDocs]);
+  useEffect(() => {
+    let active = true;
+    if (!courseId) { setLoading(false); return; }
+    Promise.all([
+      getCourse(courseId),
+      listLearningOutcomes(courseId),
+      listBlueprints(courseId),
+      listQuestions({ courseId }),
+      listExams(courseId),
+      fetchCourseDocuments(courseId),
+    ]).then(([courseRow, outcomeRows, blueprintRows, questionRows, examRows, documentRows]) => {
+      if (!active) return;
+      setCourse(courseRow); setClos(outcomeRows); setBlueprints(blueprintRows); setQuestions(questionRows); setExams(examRows); setDocs(documentRows);
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [courseId]);
 
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   if (!course) return <EmptyState title="ไม่พบรายวิชา" action={<Link to="/courses" className="btn-primary">กลับ</Link>} />;
-
-  const clos = demoStore.learningOutcomes.filter(lo => lo.course_id === course.id);
-  const blueprints = demoStore.blueprints.filter(b => b.course_id === course.id);
-  const questions = demoStore.questions.filter(q => q.course_id === course.id);
-  const exams = demoStore.exams.filter(e => e.course_id === course.id);
 
   const handleUpload = async () => {
     if (!selectedFile || !courseId) return;
@@ -49,14 +60,14 @@ export default function CourseDetailPage() {
       await loadDocs();
       setUploadMsg({ type: 'success', text: `อัปโหลด "${document.file_name}" สำเร็จ${document.extracted_text ? ' และสกัดข้อความเรียบร้อย' : ''}${extractionError ? ` (แจ้งเตือน: ${extractionError})` : ''}` });
       setSelectedFile(null); setFileDesc('');
-    } catch (err: any) { setUploadMsg({ type: 'error', text: err.message || 'อัปโหลดไม่สำเร็จ' }); }
+    } catch (err: unknown) { setUploadMsg({ type: 'error', text: err instanceof Error ? err.message : 'อัปโหลดไม่สำเร็จ' }); }
     finally { setUploading(false); }
   };
 
   const handleDelete = async () => {
     if (!docToDelete) return;
     try { await deleteCourseDocument(docToDelete.id, docToDelete.file_path); await loadDocs(); }
-    catch (err: any) { setUploadMsg({ type: 'error', text: err.message || 'ลบไม่สำเร็จ' }); }
+    catch (err: unknown) { setUploadMsg({ type: 'error', text: err instanceof Error ? err.message : 'ลบไม่สำเร็จ' }); }
     finally { setDocToDelete(null); }
   };
 

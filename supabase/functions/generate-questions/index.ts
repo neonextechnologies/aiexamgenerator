@@ -1,10 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-};
+import { corsHeaders, handleOptions, jsonResponse, requireUser } from "../_shared/auth.ts";
 
 interface GenerationRequest {
   courseId: string;
@@ -126,30 +121,27 @@ Return ONLY the JSON array, no other text.`;
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: corsHeaders });
-  }
+  const opt = handleOptions(req);
+  if (opt) return opt;
 
   try {
+    const auth = await requireUser(req);
+    if (auth instanceof Response) return auth;
+
     const body: GenerationRequest = await req.json();
+    if (!body.createdBy) body.createdBy = auth.userId;
 
     if (!body.courseId || !body.numberOfQuestions) {
-      return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({ error: "Missing required fields" }, 400);
     }
 
     const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
 
     if (!openaiApiKey) {
-      return new Response(
-        JSON.stringify({
-          error: "OpenAI API key not configured. Set OPENAI_API_KEY in Supabase secrets to use real AI generation.",
-          demoMode: true,
-        }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({
+        error: "OpenAI API key not configured. Set OPENAI_API_KEY in Supabase secrets to use real AI generation.",
+        demoMode: true,
+      }, 503);
     }
 
     const model = Deno.env.get("OPENAI_QUESTION_MODEL") || "gpt-4o";
@@ -190,10 +182,7 @@ Deno.serve(async (req: Request) => {
 
     if (!openaiResponse.ok) {
       const errorText = await openaiResponse.text();
-      return new Response(
-        JSON.stringify({ error: `OpenAI API error: ${openaiResponse.status}`, details: errorText.slice(0, 500) }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({ error: `OpenAI API error: ${openaiResponse.status}`, details: errorText.slice(0, 500) }, 502);
     }
 
     const openaiData = await openaiResponse.json();
@@ -211,12 +200,12 @@ Deno.serve(async (req: Request) => {
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         try { questions = JSON.parse(jsonMatch[0]); }
-        catch { return new Response(JSON.stringify({ error: "Failed to parse AI response as JSON" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }); }
+        catch { return jsonResponse({ error: "Failed to parse AI response as JSON" }, 500); }
       }
     }
 
     if (questions.length === 0) {
-      return new Response(JSON.stringify({ error: "AI returned no valid questions" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return jsonResponse({ error: "AI returned no valid questions" }, 500);
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -259,17 +248,21 @@ Deno.serve(async (req: Request) => {
     const outputTokens = openaiData.usage?.completion_tokens || 0;
     const totalTokens = openaiData.usage?.total_tokens || 0;
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        questions: questions,
-        savedQuestions: insertedQuestions || [],
-        insertError: insertError?.message || null,
-        usage: { inputTokens, outputTokens, totalTokens, model, latencyMs, estimatedCostUsd: ((inputTokens * 0.0000025) + (outputTokens * 0.00001)) },
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse({
+      success: true,
+      questions: questions,
+      savedQuestions: insertedQuestions || [],
+      insertError: insertError?.message || null,
+      usage: {
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        model,
+        latencyMs,
+        estimatedCostUsd: (inputTokens * 0.0000025) + (outputTokens * 0.00001),
+      },
+    });
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message || "Internal server error" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    return jsonResponse({ error: (err as Error).message || "Internal server error" }, 500);
   }
 });

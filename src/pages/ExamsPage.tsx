@@ -1,12 +1,22 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FileCheck, Plus } from 'lucide-react';
-import { Card, PageHeader, Badge, EmptyState } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, PageHeader, Badge, EmptyState, Spinner } from '../components/ui';
+import { listCourses, listExams } from '../lib/api';
 import { formatDate } from '../lib/utils';
 import { EXAM_TYPE_LABELS } from '../types';
+import type { Course, Exam } from '../types';
 
 export default function ExamsPage() {
-  const exams = demoStore.exams;
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    Promise.all([listExams(), listCourses()])
+      .then(([examRows, courseRows]) => { setExams(examRows); setCourses(courseRows); })
+      .finally(() => setLoading(false));
+  }, []);
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   return (
     <div>
       <PageHeader title="ชุดข้อสอบ" description="จัดการชุดข้อสอบและหลาย Version" actions={<button className="btn-primary"><Plus className="w-4 h-4" /> สร้างชุดข้อสอบ</button>} />
@@ -15,7 +25,7 @@ export default function ExamsPage() {
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
           {exams.map(e => {
-            const course = demoStore.courses.find(c => c.id === e.course_id);
+            const course = courses.find(c => c.id === e.course_id);
             return (
               <Link key={e.id} to={`/exams/${e.id}`}><Card hover className="p-5">
                 <div className="flex items-start justify-between mb-3"><div className="w-10 h-10 rounded-lg bg-primary-100 flex items-center justify-center"><FileCheck className="w-5 h-5 text-primary-600" /></div><Badge variant="neutral">{e.status}</Badge></div>

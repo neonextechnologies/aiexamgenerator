@@ -1,18 +1,26 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Library, Search, Eye } from 'lucide-react';
-import { Card, PageHeader, Badge, EmptyState } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, PageHeader, Badge, EmptyState, Spinner } from '../components/ui';
+import { listQuestions } from '../lib/api';
 import { truncate, formatRelativeTime } from '../lib/utils';
 import { QUESTION_TYPE_LABELS, BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE } from '../types';
+import type { Question } from '../types';
 
 export default function QuestionBankPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [bloomFilter, setBloomFilter] = useState<string>('all');
   const [diffFilter, setDiffFilter] = useState<string>('all');
+  const [allQuestions, setAllQuestions] = useState<Question[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  let questions = demoStore.questions;
+  useEffect(() => {
+    listQuestions().then(setAllQuestions).finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
+  let questions = allQuestions;
   if (search) questions = questions.filter(q => q.question_text.toLowerCase().includes(search.toLowerCase()) || q.topic?.toLowerCase().includes(search.toLowerCase()));
   if (statusFilter !== 'all') questions = questions.filter(q => q.status === statusFilter);
   if (bloomFilter !== 'all') questions = questions.filter(q => q.intended_bloom_level === bloomFilter);

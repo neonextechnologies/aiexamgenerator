@@ -1,9 +1,10 @@
+import { useEffect, useState } from 'react';
 import { Activity, CheckCircle2, XCircle, Clock } from 'lucide-react';
-import { Card, PageHeader, Badge, EmptyState } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, PageHeader, Badge, EmptyState, Spinner } from '../components/ui';
+import { listCourses, listGenerationJobs } from '../lib/api';
 import { formatRelativeTime } from '../lib/utils';
 import { QUESTION_TYPE_LABELS, BLOOM_LABELS, DIFFICULTY_LABELS } from '../types';
-import type { GenerationJobStatus } from '../types';
+import type { Course, GenerationJob, GenerationJobStatus } from '../types';
 
 const STATUS_BADGE: Record<GenerationJobStatus, 'primary'|'success'|'warning'|'error'|'neutral'|'accent'> = {
   queued:'neutral', running:'primary', validating:'accent', partially_completed:'warning', completed:'success', failed:'error', cancelled:'neutral',
@@ -11,7 +12,15 @@ const STATUS_BADGE: Record<GenerationJobStatus, 'primary'|'success'|'warning'|'e
 const STATUS_LABELS: Record<GenerationJobStatus, string> = { queued:'รอดำเนินการ', running:'กำลังทำงาน', validating:'กำลังตรวจสอบ', partially_completed:'สำเร็จบางส่วน', completed:'เสร็จสิ้น', failed:'ล้มเหลว', cancelled:'ยกเลิก' };
 
 export default function GenerationJobsPage() {
-  const jobs = demoStore.generationJobs;
+  const [jobs, setJobs] = useState<GenerationJob[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    Promise.all([listGenerationJobs(), listCourses()])
+      .then(([jobRows, courseRows]) => { setJobs(jobRows); setCourses(courseRows); })
+      .finally(() => setLoading(false));
+  }, []);
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   return (
     <div>
       <PageHeader title="งานสร้างข้อสอบ" description="ประวัติการสร้างข้อสอบด้วย AI" />
@@ -20,7 +29,7 @@ export default function GenerationJobsPage() {
       ) : (
         <div className="space-y-3">
           {jobs.map(j => {
-            const course = demoStore.courses.find(c => c.id === j.course_id);
+            const course = courses.find(c => c.id === j.course_id);
             return (
               <Card key={j.id} className="p-5">
                 <div className="flex items-start justify-between">

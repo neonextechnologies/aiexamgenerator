@@ -1,12 +1,24 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ClipboardCheck, AlertCircle } from 'lucide-react';
-import { Card, PageHeader, Badge, EmptyState } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, PageHeader, Badge, EmptyState, Spinner } from '../components/ui';
+import { listCourses, listQuestions } from '../lib/api';
 import { truncate, formatRelativeTime } from '../lib/utils';
 import { QUESTION_TYPE_LABELS, BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE } from '../types';
+import type { Course, Question } from '../types';
 
 export default function ReviewQueuePage() {
-  const pending = demoStore.questions.filter(q => ['ready_for_review', 'under_review', 'revision_requested'].includes(q.status));
+  const [pending, setPending] = useState<Question[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    Promise.all([
+      listQuestions({ statuses: ['ready_for_review', 'under_review', 'revision_requested'] }),
+      listCourses(),
+    ]).then(([questionRows, courseRows]) => { setPending(questionRows); setCourses(courseRows); })
+      .finally(() => setLoading(false));
+  }, []);
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   return (
     <div>
       <PageHeader title="คิวตรวจข้อสอบ" description="ข้อสอบที่รอการตรวจสอบโดย Reviewer" />
@@ -15,7 +27,7 @@ export default function ReviewQueuePage() {
       ) : (
         <div className="space-y-2">
           {pending.map(q => {
-            const course = demoStore.courses.find(c => c.id === q.course_id);
+            const course = courses.find(c => c.id === q.course_id);
             const hasFlags = q.quality_flags.length > 0 || (q.ai_predicted_bloom_level && q.ai_predicted_bloom_level !== q.intended_bloom_level);
             return (
               <Link key={q.id} to={`/review/${q.id}`}><Card hover className="p-4">

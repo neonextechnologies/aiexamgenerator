@@ -1,10 +1,37 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BookOpen, Plus, Users, Calendar } from 'lucide-react';
-import { Card, PageHeader, Badge, EmptyState } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, PageHeader, Badge, EmptyState, Spinner } from '../components/ui';
+import { listCourses, listLearningOutcomes, listQuestions } from '../lib/api';
+import { fetchCourseDocuments } from '../lib/documents';
+import type { Course } from '../types';
 
 export default function CoursesPage() {
-  const courses = demoStore.courses;
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [counts, setCounts] = useState<Record<string, { clos: number; docs: number; questions: number }>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const [courseRows, outcomes, questions] = await Promise.all([listCourses(), listLearningOutcomes(), listQuestions()]);
+        const documents = await Promise.all(courseRows.map(c => fetchCourseDocuments(c.id)));
+        if (!active) return;
+        setCourses(courseRows);
+        setCounts(Object.fromEntries(courseRows.map((c, i) => [c.id, {
+          clos: outcomes.filter(lo => lo.course_id === c.id).length,
+          docs: documents[i].length,
+          questions: questions.filter(q => q.course_id === c.id).length,
+        }])));
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   return (
     <div>
       <PageHeader title="รายวิชา" description="จัดการรายวิชาและเนื้อหา" actions={<button className="btn-primary"><Plus className="w-4 h-4" /> สร้างรายวิชา</button>} />
@@ -13,9 +40,9 @@ export default function CoursesPage() {
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
           {courses.map(c => {
-            const cloCount = demoStore.learningOutcomes.filter(lo => lo.course_id === c.id).length;
-            const docCount = demoStore.documents.filter(d => d.course_id === c.id).length;
-            const qCount = demoStore.questions.filter(q => q.course_id === c.id).length;
+            const cloCount = counts[c.id]?.clos || 0;
+            const docCount = counts[c.id]?.docs || 0;
+            const qCount = counts[c.id]?.questions || 0;
             return (
               <Link key={c.id} to={`/courses/${c.id}`}>
                 <Card hover className="p-5 h-full">

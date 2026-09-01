@@ -1,23 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles, Check, FileText, Target, ChevronRight, ChevronLeft, AlertCircle, Zap } from 'lucide-react';
-import { Card, PageHeader, Badge, ProgressBar } from '../components/ui';
-import { demoStore } from '../lib/demo-data';
+import { Card, PageHeader, Badge, ProgressBar, Spinner } from '../components/ui';
 import { DemoAIProvider } from '../lib/ai-provider';
-import { supabase, isDemoMode } from '../lib/supabase';
+import { isDemoMode } from '../lib/supabase';
+import { invokeEdgeFunction } from '../lib/edge';
+import { fetchCourseDocuments } from '../lib/documents';
+import { createGenerationJob, createNotification, createUsageLog, insertQuestions, listCourses, listLearningOutcomes } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_TYPE_LABELS } from '../types';
-import type { QuestionType, BloomLevel, DifficultyLevel, Language, GeneratedQuestion } from '../types';
+import type { QuestionType, BloomLevel, DifficultyLevel, Language, GeneratedQuestion, Course, Document, LearningOutcome, Question } from '../types';
+import GenerateWizardV2 from './GenerateWizardV2';
 
 const STEPS = ['เลือกรายวิชา', 'เลือกแหล่งเนื้อหา', 'เลือก Learning Outcomes', 'กำหนดข้อสอบ', 'ตรวจสอบแผน', 'สร้างข้อสอบ'];
 
-const EDGE_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
-const EDGE_HEADERS = {
-  Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-  'Content-Type': 'application/json',
-};
-
-export default function GenerateWizardPage() {
+function LegacyGenerateWizardPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [step, setStep] = useState(0);
@@ -38,10 +35,21 @@ export default function GenerateWizardPage() {
   const [error, setError] = useState<string | null>(null);
   const [usageInfo, setUsageInfo] = useState<{ model: string; totalTokens: number; costUsd: number } | null>(null);
   const [usedDemoFallback, setUsedDemoFallback] = useState(false);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [docs, setDocs] = useState<Document[]>([]);
+  const [los, setLos] = useState<LearningOutcome[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const courses = demoStore.courses;
-  const docs = courseId ? demoStore.documents.filter(d => d.course_id === courseId) : [];
-  const los = courseId ? demoStore.learningOutcomes.filter(lo => lo.course_id === courseId) : [];
+  useEffect(() => {
+    listCourses().then(setCourses).finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    setDocIds([]); setLoIds([]);
+    if (!courseId) { setDocs([]); setLos([]); return; }
+    Promise.all([fetchCourseDocuments(courseId), listLearningOutcomes(courseId)])
+      .then(([documentRows, outcomeRows]) => { setDocs(documentRows); setLos(outcomeRows); });
+  }, [courseId]);
 
   const toggle = (arr: string[], id: string, setter: (v: string[]) => void) => {
     setter(arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id]);
@@ -55,11 +63,20 @@ export default function GenerateWizardPage() {
     return true;
   };
 
-  const mapAiQuestion = (q: any): GeneratedQuestion => ({
+  type AiChoice = { id?: string; _id?: string; text?: string; isCorrect?: boolean; is_correct?: boolean; rationale?: string };
+  type AiQuestion = {
+    questionText?: string; questionType?: QuestionType; language?: Language; choices?: AiChoice[];
+    correctAnswer?: string | string[]; correct_answer?: string | string[]; explanation?: string;
+    bloomLevel?: BloomLevel; difficulty?: DifficultyLevel; learningOutcomeCodes?: string[];
+    topic?: string; marks?: number; estimatedAnswerTimeMinutes?: number; sourceReference?: string;
+    rubric?: GeneratedQuestion['rubric']; qualityFlags?: string[];
+  };
+
+  const mapAiQuestion = (q: AiQuestion): GeneratedQuestion => ({
     questionText: q.questionText || '',
     questionType: q.questionType || qType,
     language: q.language || language,
-    choices: q.choices ? q.choices.map((c: any) => ({
+    choices: q.choices ? q.choices.map((c) => ({
       id: c.id || c._id || '',
       text: c.text || '',
       is_correct: c.isCorrect ?? c.is_correct ?? false,
@@ -70,7 +87,7 @@ export default function GenerateWizardPage() {
     bloomLevel: q.bloomLevel || bloom,
     difficulty: q.difficulty || difficulty,
     learningOutcomeCodes: q.learningOutcomeCodes || loIds,
-    topic: q.topic || undefined,
+    topic: q.topic || '',
     marks: q.marks || marks,
     estimatedAnswerTimeMinutes: q.estimatedAnswerTimeMinutes || (difficulty === 'easy' ? 1 : difficulty === 'medium' ? 2 : 3),
     sourceReferences: q.sourceReference ? [{ document_id: '', file_name: q.sourceReference, page: 0, section: '', quote: null }] : [],
@@ -87,27 +104,16 @@ export default function GenerateWizardPage() {
     setUsedDemoFallback(false);
 
     try {
-      const cloCodes = loIds;
-
-      let documentTexts: { fileName: string; text: string }[] = [];
-      if (!isDemoMode && supabase) {
-        const { data: docRows } = await supabase
-          .from('documents')
-          .select('id, file_name, extracted_text')
-          .in('id', docIds);
-        documentTexts = (docRows || [])
-          .filter((d: any) => d.extracted_text)
-          .map((d: any) => ({ fileName: d.file_name, text: d.extracted_text }));
-      }
-
-      if (documentTexts.length === 0) {
-        documentTexts = docIds.map(id => {
-          const demoDoc = demoStore.documents.find(d => d.id === id);
-          return { fileName: demoDoc?.file_name || id, text: demoDoc?.extracted_text || `เนื้อหาตัวอย่างเกี่ยวกับเทคโนโลยีดิจิทัลเพื่อการศึกษา ครอบคลุม ${demoDoc?.description || ''}` };
-        });
-      }
+      const startedAt = Date.now();
+      const cloCodes = los.filter(lo => loIds.includes(lo.id)).map(lo => lo.code);
+      const documentTexts = docs.filter(d => docIds.includes(d.id)).map(d => ({
+        fileName: d.file_name,
+        text: d.extracted_text || `เนื้อหาจาก ${d.file_name} ${d.description || ''}`,
+      }));
 
       let allQs: GeneratedQuestion[] = [];
+      let savedQuestions: Question[] = [];
+      let usedFallback = false;
       let model = 'demo-model';
       let totalTokens = 0;
       let costUsd = 0;
@@ -115,23 +121,23 @@ export default function GenerateWizardPage() {
       if (!isDemoMode) {
         try {
           setProgress(10);
-          const resp = await fetch(`${EDGE_BASE}/generate-questions`, {
-            method: 'POST',
-            headers: EDGE_HEADERS,
-            body: JSON.stringify({
-              courseId, documentTexts, learningOutcomeCodes: cloCodes, questionType: qType, bloomLevel: bloom, difficulty, numberOfQuestions: num, language, marksPerQuestion: marks, includeExplanation: includeExp, includeRubric, createdBy: user?.id || 'u-inst',
-            }),
+          const { ok, status, data: result } = await invokeEdgeFunction<{
+            success?: boolean; questions?: unknown[]; savedQuestions?: Question[]; demoMode?: boolean; error?: string;
+            usage?: { model?: string; totalTokens?: number; inputTokens?: number; outputTokens?: number; estimatedCostUsd?: number };
+          }>('generate-questions', {
+            courseId, documentTexts, learningOutcomeCodes: cloCodes, questionType: qType, bloomLevel: bloom, difficulty, numberOfQuestions: num, language, marksPerQuestion: marks, includeExplanation: includeExp, includeRubric, createdBy: user?.id || 'u-inst',
           });
-          const result = await resp.json();
           setProgress(70);
 
-          if (resp.ok && result.success && result.questions) {
-            allQs = result.questions.map(mapAiQuestion);
+          if (ok && result.success && result.questions) {
+            allQs = (result.questions as AiQuestion[]).map(mapAiQuestion);
+            savedQuestions = result.savedQuestions || [];
             model = result.usage?.model || 'gpt-4o';
             totalTokens = result.usage?.totalTokens || 0;
             costUsd = result.usage?.estimatedCostUsd || 0;
             setProgress(100);
           } else if (result.demoMode) {
+            usedFallback = true;
             setUsedDemoFallback(true);
             const provider = new DemoAIProvider();
             const batchResult = await provider.generateQuestions({
@@ -142,9 +148,10 @@ export default function GenerateWizardPage() {
             totalTokens = batchResult.inputTokens + batchResult.outputTokens;
             setProgress(100);
           } else {
-            throw new Error(result.error || `Edge function returned ${resp.status}`);
+            throw new Error(result.error || `Edge function returned ${status}`);
           }
-        } catch (err: any) {
+        } catch {
+          usedFallback = true;
           setUsedDemoFallback(true);
           const provider = new DemoAIProvider();
           const batchResult = await provider.generateQuestions({
@@ -156,6 +163,7 @@ export default function GenerateWizardPage() {
           setProgress(100);
         }
       } else {
+        usedFallback = true;
         const provider = new DemoAIProvider();
         const batchSize = 5;
         const batches = Math.ceil(num / batchSize);
@@ -173,30 +181,45 @@ export default function GenerateWizardPage() {
 
       setGenerated(allQs);
       setUsageInfo({ model, totalTokens, costUsd });
-
-      allQs.forEach((gq, i) => {
-        demoStore.questions.push({
-          id: `q-gen-${Date.now()}-${i}`, course_id: courseId, question_type: gq.questionType, question_text: gq.questionText, language: gq.language, topic: gq.topic,
+      const now = new Date().toISOString();
+      if (savedQuestions.length === 0) {
+        savedQuestions = await insertQuestions(allQs.map(gq => ({
+          course_id: courseId, question_type: gq.questionType, question_text: gq.questionText, language: gq.language, topic: gq.topic,
           choices: gq.choices || null, correct_answer: gq.correctAnswer, explanation: gq.explanation,
-          intended_bloom_level: gq.bloomLevel, ai_predicted_bloom_level: gq.bloomLevel, reviewer_confirmed_bloom_level: null,
-          intended_difficulty: gq.difficulty, ai_predicted_difficulty: gq.difficulty, reviewer_confirmed_difficulty: null,
+          intended_bloom_level: gq.bloomLevel, ai_predicted_bloom_level: gq.bloomLevel,
+          intended_difficulty: gq.difficulty, ai_predicted_difficulty: gq.difficulty,
           marks: gq.marks, estimated_answer_time_minutes: gq.estimatedAnswerTimeMinutes,
           source_references: gq.sourceReferences || null, rubric: gq.rubric || null, learning_outcome_codes: gq.learningOutcomeCodes,
-          quality_flags: gq.qualityFlags, quality_score: 85, status: 'ai_generated', source_type: 'ai_generated', created_by: 'u-inst', generated_by_ai: true, ai_model: model,
-          created_at: new Date().toISOString(), updated_at: new Date().toISOString(), used_count: 0, exposure_level: 'new',
-        });
-      });
-      demoStore.generationJobs.push({
-        id: `job-${Date.now()}`, course_id: courseId, document_ids: docIds, learning_outcome_ids: loIds, question_type: qType, bloom_level: bloom, difficulty, number_of_questions: num, language, marks_per_question: marks, include_explanation: includeExp, include_rubric: includeRubric,
-        status: 'completed', generated_count: allQs.length, failed_count: 0, total_questions: num, created_by: 'u-inst', created_at: new Date().toISOString(), completed_at: new Date().toISOString(),
-        input_tokens: Math.round(totalTokens * 0.4), output_tokens: Math.round(totalTokens * 0.6), estimated_cost_usd: costUsd, model,
-      });
-    } catch (e) {
+          quality_flags: gq.qualityFlags, quality_score: 85, status: 'ai_generated', source_type: 'ai_generated',
+          created_by: user?.id || 'u-inst', generated_by_ai: true, ai_model: model,
+        })));
+      }
+      const inputTokens = Math.round(totalTokens * 0.4);
+      const outputTokens = totalTokens - inputTokens;
+      await Promise.all([
+        createGenerationJob({
+          id: `job-${Date.now()}`, course_id: courseId, document_ids: docIds, learning_outcome_ids: loIds, question_type: qType, bloom_level: bloom, difficulty, number_of_questions: num, language, marks_per_question: marks, include_explanation: includeExp, include_rubric: includeRubric,
+          status: 'completed', generated_count: savedQuestions.length, failed_count: Math.max(0, num - savedQuestions.length), total_questions: num, created_by: user?.id || 'u-inst', created_at: now, completed_at: now,
+          input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost_usd: costUsd, model,
+        }),
+        createUsageLog({
+          id: `usage-${Date.now()}`, user_id: user?.id || 'u-inst', course_id: courseId, provider: usedFallback ? 'demo' : 'openai', model,
+          request_type: 'question_generation', input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost_usd: costUsd,
+          latency_ms: Date.now() - startedAt, status: 'success', created_at: now,
+        }),
+        createNotification({
+          id: `notification-${Date.now()}`, user_id: user?.id || 'u-inst', type: 'generation_completed', title: 'สร้างข้อสอบเสร็จสิ้น',
+          message: `AI สร้างข้อสอบเสร็จสิ้น ${savedQuestions.length} ข้อ พร้อมตรวจสอบ`, link: '/generation-jobs', read: false, created_at: now,
+        }),
+      ]);
+    } catch {
       setError('เกิดข้อผิดพลาดในการสร้างข้อสอบ กรุณาลองใหม่');
     } finally {
       setGenerating(false);
     }
   };
+
+  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
 
   return (
     <div>
@@ -345,3 +368,6 @@ export default function GenerateWizardPage() {
     </div>
   );
 }
+
+export { LegacyGenerateWizardPage };
+export default GenerateWizardV2;

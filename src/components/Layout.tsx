@@ -1,31 +1,52 @@
-import { type ReactNode, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, BookOpen, Sparkles, Activity, Library, ClipboardCheck, FileCheck, BarChart3, Bell, Settings, LogOut, Menu, Brain, ChevronDown } from 'lucide-react';
+import { type ReactNode, useEffect, useState } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, BookOpen, Sparkles, Activity, Library, ClipboardCheck, FileCheck, BarChart3, Bell, Settings, LogOut, Menu, Brain, ChevronDown, PencilLine } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { isDemoMode } from '../lib/supabase';
-import { demoStore } from '../lib/demo-data';
+import { listNotifications } from '../lib/api';
 import { cn } from '../lib/utils';
 import { ROLE_LABELS } from '../types';
+import { AssistantFab } from './assistant/AssistantPanel';
 
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'แดชบอร์ด' },
   { to: '/courses', icon: BookOpen, label: 'รายวิชา' },
   { to: '/generate', icon: Sparkles, label: 'สร้างข้อสอบด้วย AI' },
+  { to: '/questions/new', icon: PencilLine, label: 'สร้างข้อสอบด้วยตนเอง' },
   { to: '/generation-jobs', icon: Activity, label: 'งานสร้างข้อสอบ' },
   { to: '/question-bank', icon: Library, label: 'คลังข้อสอบ' },
   { to: '/review', icon: ClipboardCheck, label: 'คิวตรวจข้อสอบ' },
   { to: '/exams', icon: FileCheck, label: 'ชุดข้อสอบ' },
   { to: '/reports', icon: BarChart3, label: 'รายงาน' },
-  { to: '/usage', icon: Activity, label: 'AI Usage' },
+  { to: '/notifications', icon: Bell, label: 'การแจ้งเตือน' },
   { to: '/settings', icon: Settings, label: 'ตั้งค่า' },
 ];
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const unreadCount = demoStore.notifications.filter(n => !n.read).length;
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    listNotifications(user?.id).then(items => {
+      if (active) setUnreadCount(items.filter(n => !n.read).length);
+    }).catch(() => {
+      if (active) setUnreadCount(0);
+    });
+    return () => { active = false; };
+  }, [user?.id]);
+
+  const visibleNavItems = navItems.filter(item => {
+    if (!user) return false;
+    if (item.to === '/reports') return user.role === 'academic_admin' || user.role === 'system_admin';
+    if (item.to === '/review') return user.role === 'reviewer' || user.role === 'academic_admin' || user.role === 'system_admin';
+    if (user.role === 'reviewer') return ['/dashboard', '/question-bank', '/notifications', '/settings'].includes(item.to);
+    return true;
+  });
 
   const handleSignOut = async () => { await signOut(); navigate('/login'); };
 
@@ -36,7 +57,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         <div><h1 className="text-sm font-bold text-neutral-900">AI Exam Generator</h1><p className="text-xs text-neutral-500">ระบบสร้างข้อสอบด้วย AI</p></div>
       </div>
       <nav className="flex-1 overflow-y-auto py-3 px-2">
-        {navItems.map(item => (
+        {visibleNavItems.map(item => (
           <NavLink key={item.to} to={item.to} onClick={() => setMobileOpen(false)} className={({ isActive }) => cn('flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium mb-0.5 transition-colors', isActive ? 'bg-primary-50 text-primary-700' : 'text-neutral-600 hover:bg-neutral-100')}>
             <item.icon size={18} />{item.label}
           </NavLink>
@@ -85,6 +106,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </header>
         <main className="flex-1 p-4 lg:p-6">{children}</main>
       </div>
+      <AssistantFab context={{ page: location.pathname }} />
     </div>
   );
 }
