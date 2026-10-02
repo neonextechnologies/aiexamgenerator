@@ -48,6 +48,8 @@ Edge Function `exam-engine` handles sensitive work:
 
 Legacy functions remain: `extract-document`, `generate-questions`, `seed-demo-users`.
 
+`send-email` sends notification mail with Resend (`RESEND_API_KEY`, `EMAIL_FROM`) or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_SECURE`). When neither is configured, callers keep the demo provider, which logs only.
+
 ## Provider architecture
 
 ```ts
@@ -63,6 +65,8 @@ interface AIProvider {
 ```
 
 Adapters: `demo`, `openai`, `gemini`, `anthropic`, `openai_compatible`
+
+`generate-questions` and `exam-engine` call the provider selected in Settings (or `OPENAI_API_KEY` when none is enabled). Gemini uses `generateContent`, Anthropic uses the Messages API with a JSON tool, and OpenAI-compatible endpoints use `/chat/completions`. Token usage is written to `ai_usage_logs`. Keys come from `encrypted_api_key` or the secret named by `secret_ref` (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `COMPAT_API_KEY`).
 
 Browser never receives decrypted API keys. Config rows in DB store metadata; secrets via Supabase secrets / encrypted columns accessed only by Edge.
 

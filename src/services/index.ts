@@ -8,3 +8,4 @@ export { workflowEngine } from './workflows';
 export { analysisEngine, analyzeGenerationRequest } from './workflows/analysis';
 export { chatAssistant } from './chat';
 export { notificationService, demoEmailProvider } from './notifications';
+export { getEmailProvider, getEmailStatus } from './email';

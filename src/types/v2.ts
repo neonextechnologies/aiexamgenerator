@@ -205,7 +205,9 @@ export interface GenerationV2Result {
   savedQuestions?: Question[];
   verification?: VerificationResult[];
   ruleEvaluation?: RuleEvaluationResult;
-  usage?: { inputTokens: number; outputTokens: number; totalTokens: number; model: string; estimatedCostUsd: number };
+  usage?: { inputTokens: number; outputTokens: number; totalTokens: number; model: string; estimatedCostUsd: number; provider?: string; latencyMs?: number };
+  usageLogged?: boolean;
+  demoMode?: boolean;
   error?: string;
   insufficientEvidence?: boolean;
 }

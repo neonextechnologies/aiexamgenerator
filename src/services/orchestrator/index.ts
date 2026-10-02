@@ -99,8 +99,10 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
   // Generate via edge (preferred) or DemoAI
   let generated: Array<Record<string, unknown>> = [];
   let savedQuestions: Question[] = [];
-  let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, model: 'demo-model', estimatedCostUsd: 0 };
+  let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, model: 'demo-model', estimatedCostUsd: 0, provider: 'demo', latencyMs: 0 };
   let usedProvider = request.providerId || 'prov-demo';
+  let usageLogged = false;
+  let providerError: string | null = null;
 
   if (!isDemoMode) {
     try {
@@ -109,20 +111,39 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
         questions?: unknown[];
         savedQuestions?: Question[];
         demoMode?: boolean;
+        usageLogged?: boolean;
         usage?: typeof usage;
         error?: string;
       }>('exam-engine', { action: 'generate', request, evidencePack, analysis });
       if (ok && data.success && data.questions?.length) {
         generated = data.questions as Array<Record<string, unknown>>;
         savedQuestions = data.savedQuestions || [];
-        if (data.usage) usage = data.usage;
-        usedProvider = request.providerId || 'prov-openai';
-      } else if (data.demoMode || !ok) {
-        // fallback demo
+        if (data.usage) usage = { ...usage, ...data.usage };
+        usedProvider = request.providerId || data.usage?.provider || 'prov-openai';
+        usageLogged = Boolean(data.usageLogged);
+      } else if (data.demoMode) {
+        // No provider secret — fall through to the local demo generator.
+      } else if (data.error || !ok) {
+        providerError = data.error || 'ผู้ให้บริการ AI ตอบกลับไม่สำเร็จ';
       }
     } catch {
-      // fallback
+      // Edge function unreachable — keep the demo fallback.
     }
+  }
+
+  if (providerError) {
+    await workflowEngine.completeRun(runId, 'failed', { error: providerError });
+    return {
+      success: false,
+      status: 'failed',
+      mode: request.mode,
+      executionId,
+      workflowRunId: runId,
+      evidencePack,
+      analysis,
+      questions: [],
+      error: providerError,
+    };
   }
 
   if (!generated.length) {
@@ -147,6 +168,8 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       totalTokens: batch.inputTokens + batch.outputTokens,
       model: batch.model,
       estimatedCostUsd: 0,
+      provider: 'demo',
+      latencyMs: 0,
     };
     usedProvider = 'prov-demo';
   }
@@ -250,20 +273,22 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
     completed_at: now,
   });
 
-  await createUsageLog({
-    id: `usage-${Date.now()}`,
-    user_id: request.createdBy,
-    course_id: request.courseId,
-    provider: usedProvider,
-    model: usage.model,
-    request_type: 'question_generation_v2',
-    input_tokens: usage.inputTokens,
-    output_tokens: usage.outputTokens,
-    estimated_cost_usd: usage.estimatedCostUsd,
-    latency_ms: 0,
-    status: 'success',
-    created_at: now,
-  });
+  if (!usageLogged) {
+    await createUsageLog({
+      id: `usage-${Date.now()}`,
+      user_id: request.createdBy,
+      course_id: request.courseId,
+      provider: usage.provider || usedProvider,
+      model: usage.model,
+      request_type: 'question_generation_v2',
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      estimated_cost_usd: usage.estimatedCostUsd,
+      latency_ms: usage.latencyMs || 0,
+      status: 'success',
+      created_at: now,
+    });
+  }
 
   await createNotification({
     id: `n-${Date.now()}`,
@@ -329,6 +354,16 @@ export const aiOrchestrator: AIOrchestrator = {
         });
         if (ok && data.success) return data;
         if (data?.insufficientEvidence) return data;
+        if (data && !data.demoMode && data.error) {
+          return {
+            success: false,
+            status: 'failed',
+            mode: request.mode,
+            executionId: data.executionId || `exec-failed-${Date.now()}`,
+            questions: [],
+            error: data.error,
+          };
+        }
       } catch {
         // local pipeline fallback
       }
