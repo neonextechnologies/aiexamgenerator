@@ -8,7 +8,7 @@ import { UsageSettingsPanel } from '../components/settings/UsageSettingsPanel';
 import { AIProvidersSettingsPanel } from '../components/settings/AIProvidersSettingsPanel';
 import { useAuth } from '../lib/auth';
 import { isDemoMode } from '../lib/supabase';
-import { demoEmailProvider, knowledgeProvider } from '../services';
+import { getEmailProvider, getEmailStatus, knowledgeProvider } from '../services';
 import { ROLE_LABELS } from '../types';
 
 const WIDE_TABS = new Set(['ai', 'rules', 'workflows', 'usage']);
@@ -42,6 +42,7 @@ export default function SettingsPage() {
 
   const [knowledgeReady, setKnowledgeReady] = useState<boolean | null>(null);
   const [emailResult, setEmailResult] = useState('');
+  const [emailStatus, setEmailStatus] = useState('กำลังตรวจสอบผู้ให้บริการอีเมล...');
   const supabaseConfigured = !isDemoMode;
 
   useEffect(() => {
@@ -52,6 +53,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     knowledgeProvider.healthCheck().then(setKnowledgeReady).catch(() => setKnowledgeReady(false));
+    getEmailStatus().then(status => setEmailStatus(status.message)).catch(() => setEmailStatus('ไม่สามารถตรวจสอบผู้ให้บริการอีเมลได้'));
   }, []);
 
   const setTab = (nextTab: string) => {
@@ -83,8 +85,11 @@ export default function SettingsPage() {
         {tab === 'email' && (
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-4"><Mail className="w-5 h-5 text-primary-600" /><h3 className="font-semibold">Email Provider</h3></div>
-            <div className="p-4 rounded-lg bg-warning-50 border border-warning-200"><p className="text-sm font-medium text-warning-700">Demo Email Provider</p><p className="text-xs text-warning-600 mt-1">ผู้ให้บริการนี้บันทึกข้อความลง console เท่านั้นและไม่ส่งอีเมลจริง</p></div>
-            <button className="btn-secondary mt-4" onClick={async () => setEmailResult((await demoEmailProvider.testConnection()).message)}>Test Connection</button>
+            <div className={`p-4 rounded-lg border ${isDemoMode ? 'bg-warning-50 border-warning-200' : 'bg-neutral-50 border-neutral-200'}`}>
+              <p className={`text-sm font-medium ${isDemoMode ? 'text-warning-700' : 'text-neutral-800'}`}>{isDemoMode ? 'โหมดสาธิต' : 'ผู้ให้บริการอีเมล'}</p>
+              <p className={`text-xs mt-1 ${isDemoMode ? 'text-warning-600' : 'text-neutral-500'}`}>{emailStatus}</p>
+            </div>
+            <button className="btn-secondary mt-4" onClick={async () => setEmailResult((await getEmailProvider().testConnection()).message)}>ทดสอบการเชื่อมต่อ</button>
             {emailResult && <p className="text-sm text-success-600 mt-3">{emailResult}</p>}
           </Card>
         )}
@@ -97,7 +102,7 @@ export default function SettingsPage() {
             <div className="space-y-3 text-sm">
               <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Database</span><Badge variant={supabaseConfigured ? 'success' : 'warning'}>{supabaseConfigured ? 'Connected' : 'Demo (in-memory)'}</Badge></div>
               <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Authentication</span><Badge variant={supabaseConfigured ? 'success' : 'warning'}>{supabaseConfigured ? 'Supabase Auth' : 'Demo login'}</Badge></div>
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">AI Provider</span><Badge variant={isDemoMode ? 'warning' : 'success'}>{isDemoMode ? 'Demo Mode' : 'Edge + OpenAI'}</Badge></div>
+              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">AI Provider</span><Badge variant={isDemoMode ? 'warning' : 'success'}>{isDemoMode ? 'โหมดสาธิต' : 'Edge (ตามผู้ให้บริการที่เปิดใช้)'}</Badge></div>
               <div className="flex justify-between py-2"><span className="text-neutral-500">Storage</span><Badge variant={supabaseConfigured ? 'success' : 'warning'}>{supabaseConfigured ? 'course-documents' : 'Demo'}</Badge></div>
             </div>
           </Card>

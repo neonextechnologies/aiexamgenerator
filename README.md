@@ -49,11 +49,13 @@ See `.env.example`.
 
 | Variable | Where |
 |----------|--------|
-| `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | Frontend |
-| `OPENAI_API_KEY` | Supabase secrets (optional) |
-| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` / `COMPAT_API_KEY` | Optional providers |
+| `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | Frontend. Omit both for Demo Mode |
+| `OPENAI_API_KEY` | Supabase secret. Used when OpenAI is enabled, or when no other provider is enabled |
+| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` / `COMPAT_API_KEY` | Supabase secrets for the matching Settings provider |
+| `RESEND_API_KEY` + `EMAIL_FROM` | Supabase secrets. Real email via Resend |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_SECURE` | Supabase secrets. Real email via SMTP |
 
-Never put provider secrets in `VITE_*`.
+Question generation uses the enabled provider in Settings. Email uses Resend or SMTP when those secrets are set, and the demo logger otherwise. On hosted Supabase, prefer Resend: SMTP needs a raw TCP connection from the edge runtime. Never put provider or email secrets in `VITE_*`. See `.env.example`.
 
 ## Scripts
 
@@ -63,6 +65,7 @@ npm run build
 npm run typecheck
 npm test
 npm run setup:local
+npm run lint
 ```
 
 ## Key routes

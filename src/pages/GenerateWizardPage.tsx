@@ -115,15 +115,19 @@ function LegacyGenerateWizardPage() {
       let savedQuestions: Question[] = [];
       let usedFallback = false;
       let model = 'demo-model';
+      let providerName = 'demo';
       let totalTokens = 0;
+      let inputTokens = 0;
+      let outputTokens = 0;
       let costUsd = 0;
+      let usageLogged = false;
 
       if (!isDemoMode) {
         try {
           setProgress(10);
           const { ok, status, data: result } = await invokeEdgeFunction<{
-            success?: boolean; questions?: unknown[]; savedQuestions?: Question[]; demoMode?: boolean; error?: string;
-            usage?: { model?: string; totalTokens?: number; inputTokens?: number; outputTokens?: number; estimatedCostUsd?: number };
+            success?: boolean; questions?: unknown[]; savedQuestions?: Question[]; demoMode?: boolean; error?: string; usageLogged?: boolean;
+            usage?: { provider?: string; model?: string; totalTokens?: number; inputTokens?: number; outputTokens?: number; estimatedCostUsd?: number; latencyMs?: number };
           }>('generate-questions', {
             courseId, documentTexts, learningOutcomeCodes: cloCodes, questionType: qType, bloomLevel: bloom, difficulty, numberOfQuestions: num, language, marksPerQuestion: marks, includeExplanation: includeExp, includeRubric, createdBy: user?.id || 'u-inst',
           });
@@ -133,10 +137,14 @@ function LegacyGenerateWizardPage() {
             allQs = (result.questions as AiQuestion[]).map(mapAiQuestion);
             savedQuestions = result.savedQuestions || [];
             model = result.usage?.model || 'gpt-4o';
+            providerName = result.usage?.provider || 'openai';
             totalTokens = result.usage?.totalTokens || 0;
+            inputTokens = result.usage?.inputTokens || 0;
+            outputTokens = result.usage?.outputTokens || 0;
             costUsd = result.usage?.estimatedCostUsd || 0;
+            usageLogged = Boolean(result.usageLogged);
             setProgress(100);
-          } else if (result.demoMode) {
+          } else if (result.demoMode || status === 503) {
             usedFallback = true;
             setUsedDemoFallback(true);
             const provider = new DemoAIProvider();
@@ -145,10 +153,12 @@ function LegacyGenerateWizardPage() {
             });
             allQs = batchResult.questions;
             model = batchResult.model;
+            providerName = 'demo';
             totalTokens = batchResult.inputTokens + batchResult.outputTokens;
             setProgress(100);
           } else {
-            throw new Error(result.error || `Edge function returned ${status}`);
+            setError(result.error || `สร้างข้อสอบไม่สำเร็จ (${status})`);
+            return;
           }
         } catch {
           usedFallback = true;
@@ -159,6 +169,7 @@ function LegacyGenerateWizardPage() {
           });
           allQs = batchResult.questions;
           model = 'demo-model (fallback)';
+          providerName = 'demo';
           totalTokens = batchResult.inputTokens + batchResult.outputTokens;
           setProgress(100);
         }
@@ -194,24 +205,27 @@ function LegacyGenerateWizardPage() {
           created_by: user?.id || 'u-inst', generated_by_ai: true, ai_model: model,
         })));
       }
-      const inputTokens = Math.round(totalTokens * 0.4);
-      const outputTokens = totalTokens - inputTokens;
-      await Promise.all([
+      const loggedInput = inputTokens || Math.round(totalTokens * 0.4);
+      const loggedOutput = outputTokens || Math.max(0, totalTokens - loggedInput);
+      const writes: Promise<unknown>[] = [
         createGenerationJob({
           id: `job-${Date.now()}`, course_id: courseId, document_ids: docIds, learning_outcome_ids: loIds, question_type: qType, bloom_level: bloom, difficulty, number_of_questions: num, language, marks_per_question: marks, include_explanation: includeExp, include_rubric: includeRubric,
           status: 'completed', generated_count: savedQuestions.length, failed_count: Math.max(0, num - savedQuestions.length), total_questions: num, created_by: user?.id || 'u-inst', created_at: now, completed_at: now,
-          input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost_usd: costUsd, model,
-        }),
-        createUsageLog({
-          id: `usage-${Date.now()}`, user_id: user?.id || 'u-inst', course_id: courseId, provider: usedFallback ? 'demo' : 'openai', model,
-          request_type: 'question_generation', input_tokens: inputTokens, output_tokens: outputTokens, estimated_cost_usd: costUsd,
-          latency_ms: Date.now() - startedAt, status: 'success', created_at: now,
+          input_tokens: loggedInput, output_tokens: loggedOutput, estimated_cost_usd: costUsd, model,
         }),
         createNotification({
           id: `notification-${Date.now()}`, user_id: user?.id || 'u-inst', type: 'generation_completed', title: 'สร้างข้อสอบเสร็จสิ้น',
           message: `AI สร้างข้อสอบเสร็จสิ้น ${savedQuestions.length} ข้อ พร้อมตรวจสอบ`, link: '/generation-jobs', read: false, created_at: now,
         }),
-      ]);
+      ];
+      if (!usageLogged) {
+        writes.push(createUsageLog({
+          id: `usage-${Date.now()}`, user_id: user?.id || 'u-inst', course_id: courseId, provider: usedFallback ? 'demo' : providerName, model,
+          request_type: 'question_generation', input_tokens: loggedInput, output_tokens: loggedOutput, estimated_cost_usd: costUsd,
+          latency_ms: Date.now() - startedAt, status: 'success', created_at: now,
+        }));
+      }
+      await Promise.all(writes);
     } catch {
       setError('เกิดข้อผิดพลาดในการสร้างข้อสอบ กรุณาลองใหม่');
     } finally {

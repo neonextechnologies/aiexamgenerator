@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { handleOptions, jsonResponse, requireUser } from "../_shared/auth.ts";
+import { completeAndLog, missingKeyMessage, probeRequestProvider, resolveRequestProvider } from "../_shared/llm.ts";
 
 type Action =
   | "orchestrate"
@@ -9,86 +10,6 @@ type Action =
   | "chat"
   | "ingest"
   | "provider_test";
-
-function decodeApiKey(encoded?: string | null): string {
-  if (!encoded) return "";
-  try {
-    return atob(encoded);
-  } catch {
-    return "";
-  }
-}
-
-async function resolveProviderKey(
-  supabase: ReturnType<typeof createClient>,
-  providerId?: string | null,
-  overrideKey?: string,
-): Promise<{ key: string; provider: Record<string, unknown> | null }> {
-  if (overrideKey?.trim()) return { key: overrideKey.trim(), provider: null };
-  if (!providerId) {
-    return { key: Deno.env.get("OPENAI_API_KEY") || "", provider: null };
-  }
-  const { data: provider } = await supabase.from("ai_providers").select("*").eq("id", providerId).maybeSingle();
-  if (!provider) return { key: "", provider: null };
-  const stored = decodeApiKey(provider.encrypted_api_key as string | null);
-  if (stored) return { key: stored, provider };
-  const secretName = (provider.secret_ref as string) || "OPENAI_API_KEY";
-  return { key: Deno.env.get(secretName) || "", provider };
-}
-
-async function testProviderConnection(provider: Record<string, unknown>, key: string): Promise<{ ok: boolean; message: string; status: string }> {
-  if (!key) return { ok: false, message: "ไม่พบ API key — กรุณาบันทึกในหน้าตั้งค่า", status: "missing_key" };
-
-  const providerType = String(provider.provider_type || "openai");
-  if (providerType === "openai" || providerType === "openai_compatible") {
-    const base = String(provider.base_url || "https://api.openai.com/v1").replace(/\/$/, "");
-    const resp = await fetch(`${base}/models`, { headers: { Authorization: `Bearer ${key}` } });
-    return {
-      ok: resp.ok,
-      message: resp.ok ? "เชื่อมต่อสำเร็จ" : `HTTP ${resp.status}`,
-      status: resp.ok ? "ok" : `http_${resp.status}`,
-    };
-  }
-
-  if (providerType === "anthropic") {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: String(provider.default_model || "claude-3-5-haiku-latest"),
-        max_tokens: 16,
-        messages: [{ role: "user", content: "ping" }],
-      }),
-    });
-    const ok = resp.ok || resp.status === 400;
-    return {
-      ok,
-      message: ok ? "เชื่อมต่อ Anthropic สำเร็จ" : `HTTP ${resp.status}`,
-      status: ok ? "ok" : `http_${resp.status}`,
-    };
-  }
-
-  if (providerType === "gemini") {
-    const model = String(provider.default_model || "gemini-1.5-flash");
-    const base = String(provider.base_url || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
-    const resp = await fetch(`${base}/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: "ping" }] }] }),
-    });
-    return {
-      ok: resp.ok,
-      message: resp.ok ? "เชื่อมต่อ Gemini สำเร็จ" : `HTTP ${resp.status}`,
-      status: resp.ok ? "ok" : `http_${resp.status}`,
-    };
-  }
-
-  return { ok: true, message: "API key ถูกตั้งค่าแล้ว", status: "key_present" };
-}
 
 Deno.serve(async (req: Request) => {
   const opt = handleOptions(req);
@@ -107,11 +28,11 @@ Deno.serve(async (req: Request) => {
 
     if (action === "provider_test") {
       const providerId = body.providerId as string;
-      if (providerId === "prov-demo") return jsonResponse({ ok: true, message: "Demo provider ready" }, 200, req);
-      const { data: provider } = await supabase.from("ai_providers").select("*").eq("id", providerId).maybeSingle();
+      if (providerId === "prov-demo") return jsonResponse({ ok: true, message: "Demo provider พร้อมใช้งาน" }, 200, req);
+      const { data: provider } = await supabase.from("ai_providers").select("id").eq("id", providerId).maybeSingle();
       if (!provider) return jsonResponse({ ok: false, message: "Provider not found" }, 404, req);
-      const { key } = await resolveProviderKey(supabase, providerId, body.apiKey as string | undefined);
-      const result = await testProviderConnection(provider, key);
+      const config = await resolveRequestProvider(supabase, providerId, body.apiKey as string | undefined);
+      const result = await probeRequestProvider(config);
       await supabase.from("ai_providers").update({
         last_tested_at: new Date().toISOString(),
         last_test_status: result.status,
@@ -167,12 +88,12 @@ Deno.serve(async (req: Request) => {
     if (action === "generate" || action === "orchestrate") {
       const request = body.request || body;
       const providerId = request.providerId as string | null | undefined;
-      const { key: openaiKey, provider } = await resolveProviderKey(supabase, providerId);
-      if (!openaiKey) {
+      const config = await resolveRequestProvider(supabase, providerId);
+      if (config.demo || !config.apiKey) {
         return jsonResponse({
           success: false,
           demoMode: true,
-          error: "API key not configured — set provider in Settings or configure OPENAI_API_KEY",
+          error: config.reason || missingKeyMessage(config),
         }, 503, req);
       }
 
@@ -192,9 +113,6 @@ Deno.serve(async (req: Request) => {
         }, 200, req);
       }
 
-      const model = String(provider?.generation_model || provider?.default_model || Deno.env.get("OPENAI_QUESTION_MODEL") || "gpt-4o");
-      const providerType = String(provider?.provider_type || "openai");
-      const baseUrl = String(provider?.base_url || "https://api.openai.com/v1").replace(/\/$/, "");
       const system = "You are an expert educational assessment designer. Use ONLY provided evidence. Return JSON {\"questions\":[...]} with fields questionText,questionType,language,choices,correctAnswer,explanation,bloomLevel,difficulty,learningOutcomeCodes,topic,marks,estimatedAnswerTimeMinutes,sourceReference,qualityFlags. If evidence insufficient return {\"status\":\"INSUFFICIENT_EVIDENCE\",\"questions\":[]}.";
       const user = `Create ${request.numberOfQuestions} ${request.language} questions.
 Type=${request.questionType} Bloom=${request.bloomLevel} Difficulty=${request.difficulty} Marks=${request.marksPerQuestion}
@@ -202,58 +120,34 @@ CLO=${(request.learningOutcomeCodes || []).join(", ")}
 Mode=${request.mode}
 Evidence:\n${evidenceText || "(none)"}`;
 
-      const openaiResp = providerType === "anthropic"
-        ? await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "x-api-key": openaiKey,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            max_tokens: Number(provider?.max_tokens || 8000),
-            system,
-            messages: [{ role: "user", content: user }],
-          }),
-        })
-        : providerType === "gemini"
-        ? await fetch(`${baseUrl}/models/${model}:generateContent?key=${encodeURIComponent(openaiKey)}`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: `${system}\n\n${user}` }] }],
-            generationConfig: { responseMimeType: "application/json" },
-          }),
-        })
-        : await fetch(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model,
-            messages: [{ role: "system", content: system }, { role: "user", content: user }],
-            response_format: { type: "json_object" },
-            max_completion_tokens: Number(provider?.max_tokens || 8000),
-          }),
-        });
-
-      if (!openaiResp.ok) {
-        const t = await openaiResp.text();
-        return jsonResponse({ error: `OpenAI error ${openaiResp.status}`, details: t.slice(0, 400), demoMode: true }, 502, req);
+      const completion = await completeAndLog(supabase, config, {
+        system,
+        user,
+        userId: request.createdBy || auth.userId,
+        courseId: request.courseId,
+        requestType: "question_generation_v2",
+      });
+      if (!completion.ok) {
+        return jsonResponse({
+          success: false,
+          error: completion.error,
+          details: completion.details,
+          demoMode: completion.demo,
+          usageLogged: true,
+        }, completion.status, req);
       }
 
-      const openaiData = await openaiResp.json();
-      const content = providerType === "anthropic"
-        ? openaiData.content?.[0]?.text || "{}"
-        : providerType === "gemini"
-        ? openaiData.candidates?.[0]?.content?.parts?.[0]?.text || "{}"
-        : openaiData.choices?.[0]?.message?.content || "{}";
-      let parsed: Record<string, unknown> = {};
-      try { parsed = JSON.parse(content); } catch { parsed = {}; }
+      const parsed = (completion.parsed && typeof completion.parsed === "object")
+        ? completion.parsed as Record<string, unknown>
+        : {};
       if (parsed.status === "INSUFFICIENT_EVIDENCE") {
-        return jsonResponse({ success: false, insufficientEvidence: true, status: "INSUFFICIENT_EVIDENCE", questions: [] }, 200, req);
+        return jsonResponse({ success: false, insufficientEvidence: true, status: "INSUFFICIENT_EVIDENCE", questions: [], usageLogged: true }, 200, req);
       }
-      const questions = Array.isArray(parsed.questions) ? parsed.questions : (Array.isArray(parsed) ? parsed : []);
+      const questions = completion.questions;
+      const model = completion.model;
+      if (!questions.length) {
+        return jsonResponse({ success: false, error: "AI returned no valid questions", usageLogged: true }, 500, req);
+      }
 
       const rows = questions.map((q: Record<string, unknown>) => ({
         course_id: request.courseId,
@@ -283,11 +177,13 @@ Evidence:\n${evidenceText || "(none)"}`;
 
       const { data: savedQuestions, error: insertError } = await supabase.from("questions").insert(rows).select();
       const usage = {
-        inputTokens: openaiData.usage?.prompt_tokens || openaiData.usage?.input_tokens || 0,
-        outputTokens: openaiData.usage?.completion_tokens || openaiData.usage?.output_tokens || 0,
-        totalTokens: openaiData.usage?.total_tokens || 0,
+        provider: completion.providerType,
+        inputTokens: completion.usage.inputTokens,
+        outputTokens: completion.usage.outputTokens,
+        totalTokens: completion.usage.totalTokens,
         model,
-        estimatedCostUsd: ((openaiData.usage?.prompt_tokens || openaiData.usage?.input_tokens || 0) * 0.0000025) + ((openaiData.usage?.completion_tokens || openaiData.usage?.output_tokens || 0) * 0.00001),
+        latencyMs: completion.usage.latencyMs,
+        estimatedCostUsd: completion.usage.estimatedCostUsd,
       };
 
       return jsonResponse({
@@ -298,6 +194,7 @@ Evidence:\n${evidenceText || "(none)"}`;
         questions,
         savedQuestions: savedQuestions || [],
         insertError: insertError?.message || null,
+        usageLogged: true,
         usage,
       }, 200, req);
     }

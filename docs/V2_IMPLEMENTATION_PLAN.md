@@ -70,8 +70,9 @@
 
 ## Follow-ups (non-blocking)
 
-- Real Gemini/Anthropic HTTP adapters beyond secret presence checks
+- [x] Real Gemini/Anthropic HTTP adapters for question generation (`generate-questions` and `exam-engine`), with timeouts, structured JSON, and `ai_usage_logs`
 - True embedding vectors when OPENAI/GEMINI embedding keys set
 - Visual drag-drop workflow designer
-- Full email SMTP/Resend send path
+- [x] Email send path: Resend and SMTP via the `send-email` edge function, demo provider when secrets are unset
+- [x] GitHub Actions CI: install, lint, typecheck, test, and build on push and pull requests to `main`
 - Experiment comparison UI for research runs

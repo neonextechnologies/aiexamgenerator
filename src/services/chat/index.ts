@@ -5,7 +5,7 @@ import { invokeEdgeFunction } from '../../lib/edge';
 
 export const chatAssistant: ChatAssistant = {
   async send(sessionId, message, context) {
-    let sid = sessionId || `chat-${Date.now()}`;
+    const sid = sessionId || `chat-${Date.now()}`;
     const userMsg: ChatMessage = { id: `m-u-${Date.now()}`, role: 'user', content: message, created_at: new Date().toISOString() };
 
     if (!isDemoMode && supabase) {

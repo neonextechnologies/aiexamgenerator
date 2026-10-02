@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
-import { corsHeaders, handleOptions, jsonResponse, requireUser } from "../_shared/auth.ts";
+import { handleOptions, jsonResponse, requireUser } from "../_shared/auth.ts";
+import { completeAndLog, resolveRequestProvider } from "../_shared/llm.ts";
 
 interface GenerationRequest {
   courseId: string;
@@ -117,7 +118,7 @@ Return a JSON array of ${req.numberOfQuestions} question objects. Each object mu
   "qualityFlags": []
 }
 
-Return ONLY the JSON array, no other text.`;
+Return ONLY a JSON object of the form {"questions":[ ...exactly ${req.numberOfQuestions} question objects... ]}. No other text.`;
 }
 
 Deno.serve(async (req: Request) => {
@@ -135,82 +136,35 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Missing required fields" }, 400);
     }
 
-    const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
-
-    if (!openaiApiKey) {
-      return jsonResponse({
-        error: "OpenAI API key not configured. Set OPENAI_API_KEY in Supabase secrets to use real AI generation.",
-        demoMode: true,
-      }, 503);
-    }
-
-    const model = Deno.env.get("OPENAI_QUESTION_MODEL") || "gpt-4o";
-    const maxTokens = parseInt(Deno.env.get("AI_MAX_OUTPUT_TOKENS") || "8000");
-    const isReasoningModel = /^o[134]/.test(model);
-
-    const prompt = buildPrompt(body);
-    const startTime = Date.now();
-
-    const messages = isReasoningModel
-      ? [{ role: "user", content: `You are an expert educational assessment designer. You create high-quality, academically rigorous exam questions. Always return valid JSON.\n\n${prompt}` }]
-      : [
-          { role: "system", content: "You are an expert educational assessment designer. You create high-quality, academically rigorous exam questions. Always return valid JSON." },
-          { role: "user", content: prompt },
-        ];
-
-    const buildOpenaiBody = () => JSON.stringify({
-      model,
-      messages,
-      max_completion_tokens: maxTokens,
-      response_format: { type: "json_object" },
-    });
-
-    const orgId = Deno.env.get("OPENAI_ORGANIZATION_ID");
-    const projectId = Deno.env.get("OPENAI_PROJECT_ID");
-    const baseHeaders = { "Content-Type": "application/json", "Authorization": `Bearer ${openaiApiKey}` };
-    const headersWithOrg = { ...baseHeaders, ...(orgId && { "OpenAI-Organization": orgId }), ...(projectId && { "OpenAI-Project": projectId }) };
-
-    let openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST", headers: headersWithOrg, body: buildOpenaiBody(),
-    });
-
-    if (!openaiResponse.ok && openaiResponse.status === 401 && (orgId || projectId)) {
-      openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST", headers: baseHeaders, body: buildOpenaiBody(),
-      });
-    }
-
-    if (!openaiResponse.ok) {
-      const errorText = await openaiResponse.text();
-      return jsonResponse({ error: `OpenAI API error: ${openaiResponse.status}`, details: errorText.slice(0, 500) }, 502);
-    }
-
-    const openaiData = await openaiResponse.json();
-    const latencyMs = Date.now() - startTime;
-
-    let content = openaiData.choices?.[0]?.message?.content || "";
-    let questions: any[] = [];
-
-    try {
-      const parsed = JSON.parse(content);
-      if (Array.isArray(parsed)) questions = parsed;
-      else if (parsed.questions && Array.isArray(parsed.questions)) questions = parsed.questions;
-      else if (Object.keys(parsed).length > 0 && parsed.questionText) questions = [parsed];
-    } catch {
-      const jsonMatch = content.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        try { questions = JSON.parse(jsonMatch[0]); }
-        catch { return jsonResponse({ error: "Failed to parse AI response as JSON" }, 500); }
-      }
-    }
-
-    if (questions.length === 0) {
-      return jsonResponse({ error: "AI returned no valid questions" }, 500);
-    }
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const providerId = (body as GenerationRequest & { providerId?: string }).providerId;
+    const config = await resolveRequestProvider(supabase, providerId);
+    const prompt = buildPrompt(body);
+    const completion = await completeAndLog(supabase, config, {
+      system: "You are an expert educational assessment designer. You create high-quality, academically rigorous exam questions. Always return a JSON object with a questions array.",
+      user: prompt,
+      userId: body.createdBy || auth.userId,
+      courseId: body.courseId,
+      requestType: "question_generation",
+    });
+
+    if (!completion.ok) {
+      return jsonResponse({
+        error: completion.error,
+        details: completion.details,
+        demoMode: completion.demo,
+      }, completion.status);
+    }
+
+    const questions = completion.questions as Array<Record<string, unknown>>;
+    const model = completion.model;
+    const latencyMs = completion.usage.latencyMs;
+
+    if (questions.length === 0) {
+      return jsonResponse({ error: "AI returned no valid questions", usageLogged: true }, 500);
+    }
 
     const questionsToInsert = questions.map((q: any) => ({
       course_id: body.courseId,
@@ -244,22 +198,20 @@ Deno.serve(async (req: Request) => {
       .insert(questionsToInsert)
       .select();
 
-    const inputTokens = openaiData.usage?.prompt_tokens || 0;
-    const outputTokens = openaiData.usage?.completion_tokens || 0;
-    const totalTokens = openaiData.usage?.total_tokens || 0;
-
     return jsonResponse({
       success: true,
       questions: questions,
       savedQuestions: insertedQuestions || [],
       insertError: insertError?.message || null,
+      usageLogged: true,
       usage: {
-        inputTokens,
-        outputTokens,
-        totalTokens,
+        provider: completion.providerType,
+        inputTokens: completion.usage.inputTokens,
+        outputTokens: completion.usage.outputTokens,
+        totalTokens: completion.usage.totalTokens,
         model,
         latencyMs,
-        estimatedCostUsd: (inputTokens * 0.0000025) + (outputTokens * 0.00001),
+        estimatedCostUsd: completion.usage.estimatedCostUsd,
       },
     });
   } catch (err) {
