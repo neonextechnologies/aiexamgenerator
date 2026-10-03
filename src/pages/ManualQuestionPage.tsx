@@ -6,6 +6,8 @@ import { useAuth } from '../lib/auth';
 import { DemoAIProvider } from '../lib/ai-provider';
 import { fetchCourseDocuments } from '../lib/documents';
 import { insertQuestions, listCourses, listLearningOutcomes } from '../lib/api';
+import { invokeEdgeFunction } from '../lib/edge';
+import { isDemoMode } from '../lib/supabase';
 import { aiOrchestrator } from '../services';
 import { BLOOM_LABELS } from '../types';
 import type { BloomLevel, Course, DifficultyLevel, Document, Language, LearningOutcome, QuestionChoice, QuestionType } from '../types';
@@ -59,6 +61,12 @@ export default function ManualQuestionPage() {
         setCourses(courseRows);
         setQuestionTypes(typeRows);
         setDifficulties(difficultyRows);
+        if (!typeRows.length || !difficultyRows.length) {
+          setError('ไม่พบประเภทคำถามหรือระดับความยากจากระบบ');
+        }
+      })
+      .catch(cause => {
+        setError(cause instanceof Error ? cause.message : 'โหลดประเภทคำถาม/ความยากไม่สำเร็จ');
       })
       .finally(() => setBusy(false));
   }, []);
@@ -100,25 +108,73 @@ export default function ManualQuestionPage() {
     setAssisting(true);
     setError('');
     try {
-      const result = await new DemoAIProvider().generateQuestions({
-        courseId,
-        documentIds,
-        learningOutcomeIds: loIds,
-        questionType: requiresChoices ? 'multiple_choice_single' : questionType,
-        bloomLevel: bloom || 'understand',
-        difficulty,
-        numberOfQuestions: 1,
-        language,
-        marksPerQuestion: marks,
-        includeExplanation: true,
-        includeRubric: false,
-      });
-      const suggestion = result.questions[0];
+      let suggestion: {
+        questionText?: string;
+        bloomLevel?: BloomLevel;
+        choices?: QuestionChoice[];
+        note?: string;
+      } | null = null;
+
+      const providers = await aiOrchestrator.listProviders();
+      const providerId = providers.find(p => p.is_enabled && p.provider_type !== 'demo')?.id || providers.find(p => p.is_enabled)?.id;
+
+      if (!isDemoMode) {
+        const { ok, data } = await invokeEdgeFunction<{
+          success?: boolean;
+          demoMode?: boolean;
+          suggestion?: Record<string, unknown>;
+          error?: string;
+        }>('exam-engine', {
+          action: 'manual_assist',
+          assistAction: action,
+          providerId,
+          courseId,
+          language,
+          question: {
+            question_text: questionText,
+            question_type: questionType,
+            choices,
+            bloom: bloom || 'understand',
+            difficulty,
+            learning_outcome_codes: outcomes.filter(o => loIds.includes(o.id)).map(o => o.code),
+          },
+        });
+        if (ok && data.success && data.suggestion) {
+          const s = data.suggestion;
+          suggestion = {
+            questionText: String(s.questionText || s.suggestion || ''),
+            bloomLevel: (s.bloomLevel as BloomLevel) || undefined,
+            choices: Array.isArray(s.choices) ? s.choices as QuestionChoice[] : undefined,
+            note: String(s.note || ''),
+          };
+        } else if (data?.demoMode || !ok) {
+          // labeled fallback only when edge has no key
+          setAiNote(`[Heuristic/Demo fallback] ${data?.error || 'ไม่มี API key — ใช้ Demo AI'}`);
+        }
+      }
+
+      if (!suggestion) {
+        const result = await new DemoAIProvider().generateQuestions({
+          courseId,
+          documentIds,
+          learningOutcomeIds: loIds,
+          questionType: requiresChoices ? 'multiple_choice_single' : questionType,
+          bloomLevel: bloom || 'understand',
+          difficulty,
+          numberOfQuestions: 1,
+          language,
+          marksPerQuestion: marks,
+          includeExplanation: true,
+          includeRubric: false,
+        });
+        suggestion = result.questions[0];
+      }
+
       if (action === 'wording') {
-        setAiNote(`ข้อเสนอแนะการปรับถ้อยคำ (ยังไม่ได้แทนที่ข้อความเดิม):\n${suggestion.questionText}`);
+        setAiNote(`ข้อเสนอแนะการปรับถ้อยคำ (ยังไม่ได้แทนที่ข้อความเดิม):\n${suggestion.questionText || suggestion.note || ''}`);
       } else if (action === 'bloom') {
-        if (!bloom) setBloom(suggestion.bloomLevel);
-        setAiNote(`AI แนะนำ Bloom: ${BLOOM_LABELS[suggestion.bloomLevel]}`);
+        if (suggestion.bloomLevel && !bloom) setBloom(suggestion.bloomLevel);
+        setAiNote(`AI แนะนำ Bloom: ${suggestion.bloomLevel ? BLOOM_LABELS[suggestion.bloomLevel] : (suggestion.note || '-')}`);
       } else {
         const distractors = (suggestion.choices || []).filter(choice => !choice.is_correct);
         let index = 0;

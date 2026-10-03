@@ -516,15 +516,15 @@ export const aiOrchestrator: AIOrchestrator = {
   async listQuestionTypes() {
     if (isDemoMode || !supabase) return DEMO_QTYPES;
     const { data, error } = await supabase.from('question_types').select('*').eq('is_active', true).order('sort_order');
-    if (error) return DEMO_QTYPES;
-    return (data || DEMO_QTYPES) as QuestionTypeDef[];
+    if (error) throw error;
+    return (data || []) as QuestionTypeDef[];
   },
 
   async listDifficulties() {
     if (isDemoMode || !supabase) return DEMO_DIFFS;
     const { data, error } = await supabase.from('difficulty_definitions').select('*').eq('is_active', true).order('sort_order');
-    if (error) return DEMO_DIFFS;
-    return (data || DEMO_DIFFS) as DifficultyDefinition[];
+    if (error) throw error;
+    return (data || []) as DifficultyDefinition[];
   },
 
   async testProvider(providerId, apiKey) {
