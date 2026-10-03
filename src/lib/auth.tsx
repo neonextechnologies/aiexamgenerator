@@ -14,13 +14,14 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+/** Never trust user_metadata.role — profiles (DB) is the source of truth. */
 async function fetchProfile(userId: string, fallback?: Partial<Profile>): Promise<Profile> {
   if (!supabase) {
     return {
       id: userId,
       email: fallback?.email || '',
       full_name: fallback?.full_name || 'ผู้ใช้ใหม่',
-      role: (fallback?.role as UserRole) || 'instructor',
+      role: 'instructor',
       avatar_url: fallback?.avatar_url ?? null,
       department: fallback?.department ?? null,
       created_at: fallback?.created_at || new Date().toISOString(),
@@ -38,7 +39,7 @@ async function fetchProfile(userId: string, fallback?: Partial<Profile>): Promis
     id: userId,
     email: fallback?.email || '',
     full_name: fallback?.full_name || 'ผู้ใช้ใหม่',
-    role: (fallback?.role as UserRole) || 'instructor',
+    role: 'instructor',
     avatar_url: fallback?.avatar_url ?? null,
     department: fallback?.department ?? null,
     created_at: fallback?.created_at || new Date().toISOString(),
@@ -64,7 +65,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const profile = await fetchProfile(session.user.id, {
           email: session.user.email || '',
           full_name: session.user.user_metadata?.full_name,
-          role: session.user.user_metadata?.role,
           avatar_url: session.user.user_metadata?.avatar_url,
           department: session.user.user_metadata?.department,
           created_at: session.user.created_at,
@@ -81,7 +81,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const profile = await fetchProfile(session.user.id, {
           email: session.user.email || '',
           full_name: session.user.user_metadata?.full_name,
-          role: session.user.user_metadata?.role,
           avatar_url: session.user.user_metadata?.avatar_url,
           department: session.user.user_metadata?.department,
           created_at: session.user.created_at,
@@ -123,7 +122,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const profile = await fetchProfile(data.user.id, {
           email: data.user.email || '',
           full_name: data.user.user_metadata?.full_name,
-          role: data.user.user_metadata?.role,
           avatar_url: data.user.user_metadata?.avatar_url,
           department: data.user.user_metadata?.department,
           created_at: data.user.created_at,
@@ -152,30 +150,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(newProfile);
         return { error: null };
       }
+      // Do not send role in user_metadata — DB trigger assigns instructor.
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: { data: { full_name: fullName, role: 'instructor' } },
+        options: { data: { full_name: fullName } },
       });
       if (error) return { error: error.message };
       if (data.user) {
-        // Trigger may create profile; upsert as fallback
+        // Fallback upsert without role (trigger owns role assignment / protection).
         await supabase.from('profiles').upsert({
           id: data.user.id,
           email,
           full_name: fullName,
-          role: 'instructor',
           department: null,
         }, { onConflict: 'id' });
-        setUser({
-          id: data.user.id,
+        const profile = await fetchProfile(data.user.id, {
           email,
           full_name: fullName,
-          role: 'instructor',
-          avatar_url: null,
-          department: null,
           created_at: data.user.created_at || new Date().toISOString(),
         });
+        setUser(profile);
       }
       return { error: null };
     } finally {
