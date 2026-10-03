@@ -1,4 +1,4 @@
-import type { Profile, Course, LearningOutcome, CourseTopic, Document, TestBlueprint, Question, Exam, GenerationJob, QuestionReview, Notification, AIUsageLog, AuditLog } from '../types';
+import type { Profile, Course, LearningOutcome, CourseTopic, CourseTag, Document, TestBlueprint, Question, Exam, GenerationJob, QuestionReview, Notification, AIUsageLog, AuditLog, QuestionEditHistory } from '../types';
 
 export const DEMO_PROFILES: Profile[] = [
   { id:'u-inst', email:'instructor@example.com', full_name:'ดร. สมชาย ใจดี', role:'instructor', department:'เทคโนโลยีการศึกษา', created_at:'2025-01-10T08:00:00Z' },
@@ -64,7 +64,7 @@ export const DEMO_QUESTIONS: Question[] = [
     intended_difficulty:'easy', ai_predicted_difficulty:'easy', reviewer_confirmed_difficulty:'easy',
     marks:1, estimated_answer_time_minutes:1,
     source_references:[{document_id:'doc-1',file_name:'DT99705_Course_Outline.pdf',page:5,section:'แนวคิดเทคโนโลยีดิจิทัล',quote:null}],
-    learning_outcome_codes:['CLO1'], quality_flags:[], quality_score:92,
+    learning_outcome_codes:['CLO1'], quality_flags:[], quality_score:92, tags:['กลางภาค'], content_hash:'h-demo-q1',
     status:'approved', source_type:'ai_generated', created_by:'u-inst', generated_by_ai:true, ai_model:'gpt-4o',
     approved_by:'u-rev', approved_at:'2025-06-01T10:00:00Z', created_at:'2025-05-28T10:00:00Z', updated_at:'2025-06-01T10:00:00Z',
     used_count:1, first_used_at:'2025-06-10T09:00:00Z', last_used_at:'2025-06-10T09:00:00Z', exposure_level:'low',
@@ -84,7 +84,7 @@ export const DEMO_QUESTIONS: Question[] = [
     intended_difficulty:'easy', ai_predicted_difficulty:'easy', reviewer_confirmed_difficulty:null,
     marks:1, estimated_answer_time_minutes:1,
     source_references:[{document_id:'doc-2',file_name:'Lecture_Notes_Ch1-3.pdf',page:12,section:'สื่อดิจิทัล',quote:null}],
-    learning_outcome_codes:['CLO2'], quality_flags:[], quality_score:88,
+    learning_outcome_codes:['CLO2'], quality_flags:['near_duplicate'], quality_score:88, tags:['กลางภาค'], near_duplicate_of:'q-1', near_duplicate_score:0.86, content_hash:'h-demo-q2',
     status:'ready_for_review', source_type:'ai_generated', created_by:'u-inst', generated_by_ai:true, ai_model:'gpt-4o',
     created_at:'2025-07-10T10:00:00Z', updated_at:'2025-07-10T10:00:00Z', used_count:0, exposure_level:'new',
   },
@@ -103,7 +103,7 @@ export const DEMO_QUESTIONS: Question[] = [
     intended_difficulty:'medium', ai_predicted_difficulty:'hard', reviewer_confirmed_difficulty:null,
     marks:1, estimated_answer_time_minutes:2,
     source_references:[{document_id:'doc-2',file_name:'Lecture_Notes_Ch1-3.pdf',page:20,section:'LMS',quote:null}],
-    learning_outcome_codes:['CLO2'], quality_flags:['bloom_mismatch'], quality_score:75,
+    learning_outcome_codes:['CLO2'], quality_flags:['bloom_mismatch'], quality_score:75, tags:['LMS'], content_hash:'h-demo-q3',
     status:'under_review', source_type:'ai_generated', created_by:'u-inst', generated_by_ai:true, ai_model:'gpt-4o',
     created_at:'2025-07-12T10:00:00Z', updated_at:'2025-07-14T10:00:00Z', used_count:0, exposure_level:'new',
   },
@@ -121,7 +121,7 @@ export const DEMO_QUESTIONS: Question[] = [
       { criterion:'การนำเสนอ', description:'รูปแบบและภาษา', max_marks:1, performance_levels:[{level:'ดีเยี่ยม',description:'นำเสนอยอดเยี่ยม',marks_range:'0.85-1'},{level:'ดี',description:'นำเสนอดี',marks_range:'0.65-0.84'},{level:'พอใช้',description:'นำเสนอพอใช้',marks_range:'0.3-0.64'},{level:'ต้องปรับปรุง',description:'นำเสนอยากเข้าใจ',marks_range:'0-0.29'}] },
     ]},
     source_references:[{document_id:'doc-3',file_name:'AI_in_Education_Research.pdf',page:8,section:'AI in Education',quote:null}],
-    learning_outcome_codes:['CLO3'], quality_flags:[], quality_score:85,
+    learning_outcome_codes:['CLO3'], quality_flags:[], quality_score:85, tags:['AI'], content_hash:'h-demo-q4',
     status:'revision_requested', source_type:'ai_generated', created_by:'u-inst', generated_by_ai:true, ai_model:'gpt-4o',
     created_at:'2025-07-08T10:00:00Z', updated_at:'2025-07-13T10:00:00Z', used_count:0, exposure_level:'new',
   },
@@ -140,7 +140,7 @@ export const DEMO_QUESTIONS: Question[] = [
     intended_difficulty:'medium', ai_predicted_difficulty:'medium', reviewer_confirmed_difficulty:null,
     marks:1, estimated_answer_time_minutes:2,
     source_references:[{document_id:'doc-1',file_name:'DT99705_Course_Outline.pdf',page:12,section:'ปัจจัยความสำเร็จ',quote:null}],
-    learning_outcome_codes:['CLO1'], quality_flags:[], quality_score:80,
+    learning_outcome_codes:['CLO1'], quality_flags:[], quality_score:80, tags:['กลางภาค'], content_hash:'h-demo-q5',
     status:'rejected', source_type:'ai_generated', created_by:'u-inst', generated_by_ai:true, ai_model:'gpt-4o',
     created_at:'2025-07-05T10:00:00Z', updated_at:'2025-07-06T10:00:00Z', used_count:0, exposure_level:'new',
   },
@@ -159,7 +159,7 @@ export const DEMO_QUESTIONS: Question[] = [
     intended_difficulty:'medium', ai_predicted_difficulty:'medium', reviewer_confirmed_difficulty:'medium',
     marks:1, estimated_answer_time_minutes:2,
     source_references:[{document_id:'doc-2',file_name:'Lecture_Notes_Ch1-3.pdf',page:28,section:'การประเมินผล',quote:null}],
-    learning_outcome_codes:['CLO3'], quality_flags:[], quality_score:90,
+    learning_outcome_codes:['CLO3'], quality_flags:[], quality_score:90, tags:['กลางภาค'], content_hash:'h-demo-q6',
     status:'approved', source_type:'ai_generated', created_by:'u-inst', generated_by_ai:true, ai_model:'gpt-4o',
     approved_by:'u-rev', approved_at:'2025-06-15T10:00:00Z', created_at:'2025-06-01T10:00:00Z', updated_at:'2025-06-15T10:00:00Z',
     used_count:0, exposure_level:'new',
@@ -179,7 +179,7 @@ export const DEMO_QUESTIONS: Question[] = [
     intended_difficulty:'medium', ai_predicted_difficulty:'medium', reviewer_confirmed_difficulty:null,
     marks:1, estimated_answer_time_minutes:2,
     source_references:[{document_id:'doc-2',file_name:'Lecture_Notes_Ch1-3.pdf',page:15,section:'การออกแบบสื่อ',quote:null}],
-    learning_outcome_codes:['CLO2'], quality_flags:[], quality_score:87,
+    learning_outcome_codes:['CLO2'], quality_flags:[], quality_score:87, tags:['LMS'], content_hash:'h-demo-q7',
     status:'draft', source_type:'ai_generated', created_by:'u-inst', generated_by_ai:true, ai_model:'gpt-4o',
     created_at:'2025-07-16T10:00:00Z', updated_at:'2025-07-16T10:00:00Z', used_count:0, exposure_level:'new',
   },
@@ -197,7 +197,7 @@ export const DEMO_QUESTIONS: Question[] = [
       { criterion:'การประเมินผล', description:'การวางแผนประเมินผล', max_marks:1, performance_levels:[{level:'ดีเยี่ยม',description:'ประเมินครบถ้วน',marks_range:'0.85-1'},{level:'ดี',description:'ประเมินพอสมควร',marks_range:'0.65-0.84'},{level:'พอใช้',description:'ประเมินบางส่วน',marks_range:'0.3-0.64'},{level:'ต้องปรับปรุง',description:'ขาดการประเมิน',marks_range:'0-0.29'}] },
     ]},
     source_references:[{document_id:'doc-3',file_name:'AI_in_Education_Research.pdf',page:20,section:'Personalized Learning',quote:null}],
-    learning_outcome_codes:['CLO3'], quality_flags:[], quality_score:83,
+    learning_outcome_codes:['CLO3'], quality_flags:[], quality_score:83, tags:['AI'], content_hash:'h-demo-q8',
     status:'ready_for_review', source_type:'ai_generated', created_by:'u-inst', generated_by_ai:true, ai_model:'gpt-4o',
     created_at:'2025-07-14T10:00:00Z', updated_at:'2025-07-14T10:00:00Z', used_count:0, exposure_level:'new',
   },
@@ -251,6 +251,11 @@ class DemoStore {
   courses: Course[] = [DEMO_COURSE];
   learningOutcomes: LearningOutcome[] = [...DEMO_CLOS];
   topics: CourseTopic[] = [...DEMO_TOPICS];
+  tags: CourseTag[] = [
+    { id: 'tag-1', course_id: 'c-dt99705', name: 'กลางภาค', color: '#2563eb', created_at: '2025-01-15T09:00:00Z' },
+    { id: 'tag-2', course_id: 'c-dt99705', name: 'AI', color: '#059669', created_at: '2025-01-15T09:00:00Z' },
+    { id: 'tag-3', course_id: 'c-dt99705', name: 'LMS', color: '#d97706', created_at: '2025-01-15T09:00:00Z' },
+  ];
   documents: Document[] = [...DEMO_DOCUMENTS];
   blueprints: TestBlueprint[] = [DEMO_BLUEPRINT];
   questions: Question[] = [...DEMO_QUESTIONS];
@@ -259,12 +264,18 @@ class DemoStore {
   notifications: Notification[] = [...DEMO_NOTIFICATIONS];
   usageLogs: AIUsageLog[] = [...DEMO_USAGE_LOGS];
   auditLogs: AuditLog[] = [...DEMO_AUDIT_LOGS];
+  editHistory: QuestionEditHistory[] = [];
   generationJobs: GenerationJob[] = [DEMO_GEN_JOB];
   reset() {
     this.profiles=[...DEMO_PROFILES]; this.courses=[DEMO_COURSE]; this.learningOutcomes=[...DEMO_CLOS]; this.topics=[...DEMO_TOPICS];
+    this.tags=[
+      { id: 'tag-1', course_id: 'c-dt99705', name: 'กลางภาค', color: '#2563eb', created_at: '2025-01-15T09:00:00Z' },
+      { id: 'tag-2', course_id: 'c-dt99705', name: 'AI', color: '#059669', created_at: '2025-01-15T09:00:00Z' },
+      { id: 'tag-3', course_id: 'c-dt99705', name: 'LMS', color: '#d97706', created_at: '2025-01-15T09:00:00Z' },
+    ];
     this.documents=[...DEMO_DOCUMENTS]; this.blueprints=[DEMO_BLUEPRINT]; this.questions=[...DEMO_QUESTIONS]; this.exams=[DEMO_EXAM];
     this.reviews=[...DEMO_REVIEWS]; this.notifications=[...DEMO_NOTIFICATIONS]; this.usageLogs=[...DEMO_USAGE_LOGS]; this.auditLogs=[...DEMO_AUDIT_LOGS];
-    this.generationJobs=[DEMO_GEN_JOB];
+    this.editHistory=[]; this.generationJobs=[DEMO_GEN_JOB];
   }
 }
 

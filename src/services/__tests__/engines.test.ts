@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { evaluateRules, sortRulesByPriority, simpleHash } from '../rules';
 import { verifyQuestionDeterministic } from '../verification';
 import { analyzeGenerationRequest } from '../workflows/analysis';
+import { contentHashForQuestion } from '../duplicates';
 import type { Rule, EvidencePack, GenerationV2Request } from '../../types/v2';
 
 const baseRules: Rule[] = [
@@ -91,13 +92,14 @@ describe('Verification Engine', () => {
 
   it('detects duplicates via hash list', () => {
     const text = 'คำถามซ้ำ';
-    const h = simpleHash(text.toLowerCase());
+    const h = contentHashForQuestion(text);
     const r = verifyQuestionDeterministic({
       question_text: text,
       learning_outcome_codes: ['CLO1'],
       question_type: 'short_answer',
     }, { knowledgeBounded: false, existingHashes: [h] });
     expect(r.violations).toContain('duplicate');
+    expect(simpleHash(text)).toBeTruthy();
   });
 });
 

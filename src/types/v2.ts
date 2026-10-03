@@ -146,6 +146,12 @@ export interface VerificationResult {
   violations: string[];
   recommendations: string[];
   dimensions?: Record<string, number>;
+  duplicateMatches?: Array<{
+    questionId: string;
+    kind: 'exact' | 'near';
+    score: number;
+    questionText?: string;
+  }>;
 }
 
 export interface AIProviderConfig {

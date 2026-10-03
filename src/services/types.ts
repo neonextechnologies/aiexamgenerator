@@ -91,10 +91,16 @@ export interface VerificationEngine {
     evidencePack?: EvidencePack | null;
     knowledgeBounded: boolean;
     existingHashes?: string[];
+    bankQuestions?: Array<{ id: string; question_text: string; content_hash?: string | null; course_id?: string }>;
+    excludeId?: string;
+    nearThreshold?: number;
   }): Promise<VerificationResult>;
   verifyBatch(questions: Partial<Question>[], ctx: {
     evidencePack?: EvidencePack | null;
     knowledgeBounded: boolean;
+    existingHashes?: string[];
+    bankQuestions?: Array<{ id: string; question_text: string; content_hash?: string | null; course_id?: string }>;
+    nearThreshold?: number;
   }): Promise<VerificationResult[]>;
 }
 

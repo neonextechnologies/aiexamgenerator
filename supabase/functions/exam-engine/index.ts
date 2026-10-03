@@ -113,9 +113,15 @@ Deno.serve(async (req: Request) => {
         }, 200, req);
       }
 
-      const system = "You are an expert educational assessment designer. Use ONLY provided evidence. Return JSON {\"questions\":[...]} with fields questionText,questionType,language,choices,correctAnswer,explanation,bloomLevel,difficulty,learningOutcomeCodes,topic,marks,estimatedAnswerTimeMinutes,sourceReference,qualityFlags. If evidence insufficient return {\"status\":\"INSUFFICIENT_EVIDENCE\",\"questions\":[]}.";
+      const includeRubric = request.includeRubric === true
+        || request.questionType === 'essay'
+        || request.questionType === 'case_study';
+      const rubricInstruction = includeRubric
+        ? `For every essay or case_study question you MUST include a "rubric" object with totalMarks=${request.marksPerQuestion} and criteria[]. Each criterion needs criterion, description, maxMarks, performanceLevels[{level,description,marksRange}] using Thai levels ดีเยี่ยม/ดี/พอใช้/ต้องปรับปรุง. Criterion maxMarks must sum to ${request.marksPerQuestion}.`
+        : 'Rubric is optional except when the question is essay/case_study.';
+      const system = `You are an expert educational assessment designer. Use ONLY provided evidence. Return JSON {"questions":[...]} with fields questionText,questionType,language,choices,correctAnswer,explanation,bloomLevel,difficulty,learningOutcomeCodes,topic,tags,marks,estimatedAnswerTimeMinutes,sourceReference,qualityFlags,rubric. ${rubricInstruction} If evidence insufficient return {"status":"INSUFFICIENT_EVIDENCE","questions":[]}.`;
       const user = `Create ${request.numberOfQuestions} ${request.language} questions.
-Type=${request.questionType} Bloom=${request.bloomLevel} Difficulty=${request.difficulty} Marks=${request.marksPerQuestion}
+Type=${request.questionType} Bloom=${request.bloomLevel} Difficulty=${request.difficulty} Marks=${request.marksPerQuestion} includeRubric=${includeRubric}
 CLO=${(request.learningOutcomeCodes || []).join(", ")}
 Mode=${request.mode}
 Evidence:\n${evidenceText || "(none)"}`;
@@ -149,31 +155,78 @@ Evidence:\n${evidenceText || "(none)"}`;
         return jsonResponse({ success: false, error: "AI returned no valid questions", usageLogged: true }, 500, req);
       }
 
-      const rows = questions.map((q: Record<string, unknown>) => ({
-        course_id: request.courseId,
-        question_text: q.questionText || "",
-        question_type: q.questionType || request.questionType,
-        language: q.language || request.language,
-        choices: q.choices || null,
-        correct_answer: typeof q.correctAnswer === "string" ? q.correctAnswer : JSON.stringify(q.correctAnswer ?? ""),
-        explanation: q.explanation || "",
-        intended_bloom_level: q.bloomLevel || request.bloomLevel,
-        ai_predicted_bloom_level: q.bloomLevel || request.bloomLevel,
-        intended_difficulty: q.difficulty || request.difficulty,
-        ai_predicted_difficulty: q.difficulty || request.difficulty,
-        marks: q.marks || request.marksPerQuestion,
-        estimated_answer_time_minutes: q.estimatedAnswerTimeMinutes || 2,
-        source_references: q.sourceReference ? [{ document_id: null, file_name: null, page: 1, section: q.sourceReference, quote: null }] : null,
-        learning_outcome_codes: q.learningOutcomeCodes || request.learningOutcomeCodes || [],
-        quality_flags: q.qualityFlags || [],
-        topic: q.topic || null,
-        status: "ready_for_review",
-        source_type: "ai_generated",
-        generated_by_ai: true,
-        ai_model: model,
-        created_by: request.createdBy || auth.userId,
-        generation_mode: request.mode || "ai",
-      }));
+      const rows = questions.map((q: Record<string, unknown>) => {
+        const qType = String(q.questionType || request.questionType);
+        const marks = Number(q.marks || request.marksPerQuestion);
+        let rubric = q.rubric || null;
+        if ((includeRubric || qType === 'essay' || qType === 'case_study') && !rubric) {
+          rubric = {
+            totalMarks: marks,
+            criteria: [
+              {
+                criterion: 'เนื้อหาและความถูกต้อง',
+                description: 'ความถูกต้องและความครอบคลุม',
+                maxMarks: Number((marks * 0.4).toFixed(2)),
+                performanceLevels: [
+                  { level: 'ดีเยี่ยม', description: 'ครอบคลุม ถูกต้อง', marksRange: `${(marks * 0.4 * 0.85).toFixed(2)}-${(marks * 0.4).toFixed(2)}` },
+                  { level: 'ดี', description: 'ถูกต้องพอสมควร', marksRange: `${(marks * 0.4 * 0.65).toFixed(2)}-${(marks * 0.4 * 0.84).toFixed(2)}` },
+                  { level: 'พอใช้', description: 'ถูกต้องบางส่วน', marksRange: `${(marks * 0.4 * 0.3).toFixed(2)}-${(marks * 0.4 * 0.64).toFixed(2)}` },
+                  { level: 'ต้องปรับปรุง', description: 'ไม่ถูกต้อง', marksRange: `0-${(marks * 0.4 * 0.29).toFixed(2)}` },
+                ],
+              },
+              {
+                criterion: 'การวิเคราะห์',
+                description: 'ความลึกซึ้งของการวิเคราะห์',
+                maxMarks: Number((marks * 0.4).toFixed(2)),
+                performanceLevels: [
+                  { level: 'ดีเยี่ยม', description: 'วิเคราะห์ลึกซึ้ง', marksRange: `${(marks * 0.4 * 0.85).toFixed(2)}-${(marks * 0.4).toFixed(2)}` },
+                  { level: 'ดี', description: 'วิเคราะห์ได้ดี', marksRange: `${(marks * 0.4 * 0.65).toFixed(2)}-${(marks * 0.4 * 0.84).toFixed(2)}` },
+                  { level: 'พอใช้', description: 'วิเคราะห์ได้บางส่วน', marksRange: `${(marks * 0.4 * 0.3).toFixed(2)}-${(marks * 0.4 * 0.64).toFixed(2)}` },
+                  { level: 'ต้องปรับปรุง', description: 'วิเคราะห์ไม่ชัดเจน', marksRange: `0-${(marks * 0.4 * 0.29).toFixed(2)}` },
+                ],
+              },
+              {
+                criterion: 'การนำเสนอ',
+                description: 'รูปแบบและภาษา',
+                maxMarks: Number((marks * 0.2).toFixed(2)),
+                performanceLevels: [
+                  { level: 'ดีเยี่ยม', description: 'นำเสนอยอดเยี่ยม', marksRange: `${(marks * 0.2 * 0.85).toFixed(2)}-${(marks * 0.2).toFixed(2)}` },
+                  { level: 'ดี', description: 'นำเสนอดี', marksRange: `${(marks * 0.2 * 0.65).toFixed(2)}-${(marks * 0.2 * 0.84).toFixed(2)}` },
+                  { level: 'พอใช้', description: 'นำเสนอพอใช้', marksRange: `${(marks * 0.2 * 0.3).toFixed(2)}-${(marks * 0.2 * 0.64).toFixed(2)}` },
+                  { level: 'ต้องปรับปรุง', description: 'นำเสนอยากเข้าใจ', marksRange: `0-${(marks * 0.2 * 0.29).toFixed(2)}` },
+                ],
+              },
+            ],
+          };
+        }
+        return {
+          course_id: request.courseId,
+          question_text: q.questionText || '',
+          question_type: qType,
+          language: q.language || request.language,
+          choices: q.choices || null,
+          correct_answer: typeof q.correctAnswer === 'string' ? q.correctAnswer : JSON.stringify(q.correctAnswer ?? ''),
+          explanation: q.explanation || '',
+          intended_bloom_level: q.bloomLevel || request.bloomLevel,
+          ai_predicted_bloom_level: q.bloomLevel || request.bloomLevel,
+          intended_difficulty: q.difficulty || request.difficulty,
+          ai_predicted_difficulty: q.difficulty || request.difficulty,
+          marks,
+          estimated_answer_time_minutes: q.estimatedAnswerTimeMinutes || 2,
+          source_references: q.sourceReference ? [{ document_id: null, file_name: null, page: 1, section: q.sourceReference, quote: null }] : null,
+          learning_outcome_codes: q.learningOutcomeCodes || request.learningOutcomeCodes || [],
+          quality_flags: q.qualityFlags || [],
+          topic: q.topic || null,
+          tags: Array.isArray(q.tags) ? q.tags : [],
+          rubric,
+          status: 'ready_for_review',
+          source_type: 'ai_generated',
+          generated_by_ai: true,
+          ai_model: model,
+          created_by: request.createdBy || auth.userId,
+          generation_mode: request.mode || 'ai',
+        };
+      });
 
       const { data: savedQuestions, error: insertError } = await supabase.from("questions").insert(rows).select();
       const usage = {
