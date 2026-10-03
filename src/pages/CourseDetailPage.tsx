@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { FileText, Plus, ArrowLeft, Target, Settings, Upload, Trash2, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { FileText, Plus, ArrowLeft, Target, Settings, Upload, Trash2, Loader2, AlertCircle, CheckCircle2, BookMarked } from 'lucide-react';
 import { Card, Tabs, Badge, PageHeader, EmptyState, Modal, Spinner } from '../components/ui';
-import { createBlueprint, createLearningOutcome, getCourse, listLearningOutcomes, listBlueprints, listQuestions, listExams } from '../lib/api';
+import { createBlueprint, createCourseTopic, createLearningOutcome, getCourse, listCourseTopics, listLearningOutcomes, listBlueprints, listQuestions, listExams, updateCourse } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fetchCourseDocuments, uploadCourseDocument, deleteCourseDocument } from '../lib/documents';
 import { formatDate, formatBytes, truncate } from '../lib/utils';
 import { BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_TYPE_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE, EXAM_TYPE_LABELS } from '../types';
-import type { BloomLevel, Course, DifficultyLevel, Document as DocType, ExamType, LearningOutcome, QuestionType, TestBlueprint, Question, Exam } from '../types';
+import type { BloomLevel, Course, CourseTopic, DifficultyLevel, Document as DocType, ExamType, LearningOutcome, QuestionType, TestBlueprint, Question, Exam } from '../types';
 
 export default function CourseDetailPage() {
   const { courseId } = useParams();
@@ -17,6 +17,7 @@ export default function CourseDetailPage() {
   const [blueprints, setBlueprints] = useState<TestBlueprint[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
+  const [topics, setTopics] = useState<CourseTopic[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('overview');
   const [docs, setDocs] = useState<DocType[]>([]);
@@ -28,9 +29,23 @@ export default function CourseDetailPage() {
   const [docToDelete, setDocToDelete] = useState<DocType | null>(null);
   const [cloOpen, setCloOpen] = useState(false);
   const [bpOpen, setBpOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [topicOpen, setTopicOpen] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
+  const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
   const [cloForm, setCloForm] = useState({ code: '', title: '', description: '', outcome_type: 'CLO' as LearningOutcome['outcome_type'], bloom_level: 'understand' as BloomLevel, weight: 10 });
+  const [topicForm, setTopicForm] = useState({ title: '', description: '', week_number: '' });
+  const [courseForm, setCourseForm] = useState({
+    course_name_th: '',
+    course_name_en: '',
+    description: '',
+    credits: 3,
+    faculty: '',
+    level: '',
+    semester: '1',
+    academic_year: '',
+  });
   const [bpForm, setBpForm] = useState({
     name: '',
     exam_type: 'midterm' as ExamType,
@@ -47,15 +62,34 @@ export default function CourseDetailPage() {
 
   const reloadCourseData = useCallback(async () => {
     if (!courseId) return;
-    const [courseRow, outcomeRows, blueprintRows, questionRows, examRows, documentRows] = await Promise.all([
+    const [courseRow, outcomeRows, blueprintRows, questionRows, examRows, documentRows, topicRows] = await Promise.all([
       getCourse(courseId),
       listLearningOutcomes(courseId),
       listBlueprints(courseId),
       listQuestions({ courseId }),
       listExams(courseId),
       fetchCourseDocuments(courseId),
+      listCourseTopics(courseId),
     ]);
-    setCourse(courseRow); setClos(outcomeRows); setBlueprints(blueprintRows); setQuestions(questionRows); setExams(examRows); setDocs(documentRows);
+    setCourse(courseRow);
+    setClos(outcomeRows);
+    setBlueprints(blueprintRows);
+    setQuestions(questionRows);
+    setExams(examRows);
+    setDocs(documentRows);
+    setTopics(topicRows);
+    if (courseRow) {
+      setCourseForm({
+        course_name_th: courseRow.course_name_th,
+        course_name_en: courseRow.course_name_en || '',
+        description: courseRow.description || '',
+        credits: courseRow.credits,
+        faculty: courseRow.faculty || '',
+        level: courseRow.level || '',
+        semester: courseRow.semester,
+        academic_year: courseRow.academic_year,
+      });
+    }
   }, [courseId]);
 
   const loadDocs = useCallback(async () => {
@@ -95,16 +129,34 @@ export default function CourseDetailPage() {
   const tabs = [
     { id: 'overview', label: 'ภาพรวม' },
     { id: 'outcomes', label: 'Learning Outcomes', count: clos.length },
+    { id: 'topics', label: 'หัวข้อ', count: topics.length },
     { id: 'documents', label: 'เอกสาร', count: docs.length },
     { id: 'blueprints', label: 'Blueprint', count: blueprints.length },
     { id: 'questions', label: 'ข้อสอบ', count: questions.length },
     { id: 'exams', label: 'ชุดข้อสอบ', count: exams.length },
   ];
 
+  const openSettings = () => {
+    setCourseForm({
+      course_name_th: course.course_name_th,
+      course_name_en: course.course_name_en || '',
+      description: course.description || '',
+      credits: course.credits,
+      faculty: course.faculty || '',
+      level: course.level || '',
+      semester: course.semester,
+      academic_year: course.academic_year,
+    });
+    setMetaError(null);
+    setSettingsMsg(null);
+    setSettingsOpen(true);
+  };
+
   return (
     <div>
       <Link to="/courses" className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-700 mb-4"><ArrowLeft className="w-4 h-4" /> กลับ</Link>
-      <PageHeader title={course.course_name_th} description={`${course.course_code} • ${course.course_name_en || ''}`} actions={<button className="btn-secondary"><Settings className="w-4 h-4" /> ตั้งค่า</button>} />
+      <PageHeader title={course.course_name_th} description={`${course.course_code} • ${course.course_name_en || ''}`} actions={<button type="button" className="btn-secondary" onClick={openSettings}><Settings className="w-4 h-4" /> ตั้งค่า</button>} />
+      {settingsMsg && <div className="mb-4 p-3 rounded-lg bg-success-50 text-success-700 text-sm">{settingsMsg}</div>}
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
       <div className="mt-6">
         {tab === 'overview' && (
@@ -123,12 +175,45 @@ export default function CourseDetailPage() {
               <h3 className="font-semibold text-neutral-900 mb-3">สถิติ</h3>
               <div className="space-y-3">
                 <div className="flex items-center justify-between"><span className="text-sm text-neutral-500">CLO</span><Badge variant="primary">{clos.length}</Badge></div>
+                <div className="flex items-center justify-between"><span className="text-sm text-neutral-500">หัวข้อ</span><Badge variant="neutral">{topics.length}</Badge></div>
                 <div className="flex items-center justify-between"><span className="text-sm text-neutral-500">เอกสาร</span><Badge variant="accent">{docs.length}</Badge></div>
                 <div className="flex items-center justify-between"><span className="text-sm text-neutral-500">Blueprint</span><Badge variant="warning">{blueprints.length}</Badge></div>
                 <div className="flex items-center justify-between"><span className="text-sm text-neutral-500">ข้อสอบ</span><Badge variant="success">{questions.length}</Badge></div>
                 <div className="flex items-center justify-between"><span className="text-sm text-neutral-500">ชุดข้อสอบ</span><Badge variant="primary">{exams.length}</Badge></div>
               </div>
             </Card>
+          </div>
+        )}
+        {tab === 'topics' && (
+          <div>
+            <div className="flex justify-end mb-4">
+              <button type="button" className="btn-primary" onClick={() => { setTopicOpen(true); setMetaError(null); }}>
+                <Plus className="w-4 h-4" /> เพิ่มหัวข้อ
+              </button>
+            </div>
+            {topics.length === 0 ? (
+              <EmptyState title="ยังไม่มีหัวข้อ" description="สร้างหัวข้อเพื่อจัดหมวดข้อสอบและ Blueprint" action={<button type="button" className="btn-primary" onClick={() => setTopicOpen(true)}><Plus className="w-4 h-4" /> เพิ่มหัวข้อแรก</button>} />
+            ) : (
+              <div className="space-y-3">
+                {topics.map(topic => (
+                  <Card key={topic.id} className="p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-accent-100 flex items-center justify-center flex-shrink-0">
+                        <BookMarked className="w-5 h-5 text-accent-600" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-medium text-neutral-900">{topic.title}</p>
+                          {topic.week_number != null && <Badge variant="neutral">สัปดาห์ {topic.week_number}</Badge>}
+                          <Badge variant="neutral">#{topic.sort_order}</Badge>
+                        </div>
+                        {topic.description && <p className="text-sm text-neutral-500 mt-1">{topic.description}</p>}
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {tab === 'outcomes' && (
@@ -265,6 +350,82 @@ export default function CourseDetailPage() {
         <div className="flex justify-end gap-2 pt-4">
           <button onClick={() => setDocToDelete(null)} className="btn-secondary">ยกเลิก</button>
           <button onClick={handleDelete} className="btn-primary bg-error-600 hover:bg-error-700">ลบ</button>
+        </div>
+      </Modal>
+
+      <Modal open={settingsOpen} onClose={() => !savingMeta && setSettingsOpen(false)} title="ตั้งค่ารายวิชา" size="lg">
+        <div className="space-y-3">
+          <div className="grid md:grid-cols-2 gap-3">
+            <div><label className="label">ชื่อรายวิชา (ไทย)</label><input className="input" value={courseForm.course_name_th} onChange={e => setCourseForm({ ...courseForm, course_name_th: e.target.value })} /></div>
+            <div><label className="label">ชื่อรายวิชา (อังกฤษ)</label><input className="input" value={courseForm.course_name_en} onChange={e => setCourseForm({ ...courseForm, course_name_en: e.target.value })} /></div>
+          </div>
+          <div><label className="label">คำอธิบาย</label><textarea className="input min-h-20" value={courseForm.description} onChange={e => setCourseForm({ ...courseForm, description: e.target.value })} /></div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div><label className="label">หน่วยกิต</label><input className="input" type="number" min={0} value={courseForm.credits} onChange={e => setCourseForm({ ...courseForm, credits: Number(e.target.value) || 0 })} /></div>
+            <div><label className="label">ระดับ</label><input className="input" value={courseForm.level} onChange={e => setCourseForm({ ...courseForm, level: e.target.value })} placeholder="เช่น ปริญญาตรี" /></div>
+            <div><label className="label">คณะ</label><input className="input" value={courseForm.faculty} onChange={e => setCourseForm({ ...courseForm, faculty: e.target.value })} /></div>
+            <div><label className="label">ภาคเรียน</label><input className="input" value={courseForm.semester} onChange={e => setCourseForm({ ...courseForm, semester: e.target.value })} /></div>
+            <div><label className="label">ปีการศึกษา</label><input className="input" value={courseForm.academic_year} onChange={e => setCourseForm({ ...courseForm, academic_year: e.target.value })} /></div>
+          </div>
+          {metaError && <p className="text-sm text-error-600">{metaError}</p>}
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-secondary" disabled={savingMeta} onClick={() => setSettingsOpen(false)}>ยกเลิก</button>
+            <button type="button" className="btn-primary" disabled={savingMeta} onClick={async () => {
+              if (!courseId || !courseForm.course_name_th.trim()) { setMetaError('กรุณาระบุชื่อรายวิชา'); return; }
+              setSavingMeta(true); setMetaError(null);
+              try {
+                const updated = await updateCourse(courseId, {
+                  course_name_th: courseForm.course_name_th.trim(),
+                  course_name_en: courseForm.course_name_en.trim() || null,
+                  description: courseForm.description.trim() || null,
+                  credits: courseForm.credits,
+                  faculty: courseForm.faculty.trim() || null,
+                  level: courseForm.level.trim() || null,
+                  semester: courseForm.semester.trim() || '1',
+                  academic_year: courseForm.academic_year.trim(),
+                });
+                setCourse(updated);
+                setSettingsOpen(false);
+                setSettingsMsg('บันทึกตั้งค่ารายวิชาเรียบร้อย');
+              } catch (err) {
+                setMetaError(err instanceof Error ? err.message : 'บันทึกไม่สำเร็จ');
+              } finally {
+                setSavingMeta(false);
+              }
+            }}>{savingMeta ? <Spinner size="sm" /> : 'บันทึก'}</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={topicOpen} onClose={() => !savingMeta && setTopicOpen(false)} title="เพิ่มหัวข้อรายวิชา">
+        <div className="space-y-3">
+          <div><label className="label">ชื่อหัวข้อ</label><input className="input" value={topicForm.title} onChange={e => setTopicForm({ ...topicForm, title: e.target.value })} placeholder="เช่น โครงสร้างข้อมูลพื้นฐาน" /></div>
+          <div><label className="label">คำอธิบาย</label><textarea className="input min-h-20" value={topicForm.description} onChange={e => setTopicForm({ ...topicForm, description: e.target.value })} /></div>
+          <div><label className="label">สัปดาห์ที่ (ไม่บังคับ)</label><input className="input" type="number" min={1} value={topicForm.week_number} onChange={e => setTopicForm({ ...topicForm, week_number: e.target.value })} /></div>
+          {metaError && <p className="text-sm text-error-600">{metaError}</p>}
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-secondary" disabled={savingMeta} onClick={() => setTopicOpen(false)}>ยกเลิก</button>
+            <button type="button" className="btn-primary" disabled={savingMeta} onClick={async () => {
+              if (!courseId || !topicForm.title.trim()) { setMetaError('กรุณาระบุชื่อหัวข้อ'); return; }
+              setSavingMeta(true); setMetaError(null);
+              try {
+                await createCourseTopic({
+                  course_id: courseId,
+                  title: topicForm.title,
+                  description: topicForm.description || undefined,
+                  week_number: topicForm.week_number ? Number(topicForm.week_number) : null,
+                });
+                setTopicOpen(false);
+                setTopicForm({ title: '', description: '', week_number: '' });
+                setSettingsMsg('เพิ่มหัวข้อเรียบร้อย');
+                await reloadCourseData();
+              } catch (err) {
+                setMetaError(err instanceof Error ? err.message : 'บันทึกไม่สำเร็จ');
+              } finally {
+                setSavingMeta(false);
+              }
+            }}>{savingMeta ? <Spinner size="sm" /> : 'บันทึก'}</button>
+          </div>
         </div>
       </Modal>
 

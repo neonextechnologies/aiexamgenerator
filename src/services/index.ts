@@ -7,7 +7,14 @@ export { verificationEngine, verifyQuestionDeterministic } from './verification'
 export { workflowEngine } from './workflows';
 export { analysisEngine, analyzeGenerationRequest } from './workflows/analysis';
 export { chatAssistant } from './chat';
-export { notificationService, demoEmailProvider } from './notifications';
+export {
+  notificationService,
+  demoEmailProvider,
+  getNotificationPreferences,
+  saveNotificationPreferences,
+  substituteTemplate,
+} from './notifications';
+export type { NotificationPreferences } from './notifications';
 export { getEmailProvider, getEmailStatus } from './email';
 export { contentHashForQuestion, findDuplicateMatches, trigramSimilarity } from './duplicates';
 export { buildDefaultEssayRubric, ensureRubricForQuestion, normalizeRubric } from './rubric';

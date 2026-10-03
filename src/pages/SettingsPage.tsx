@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Database, Mail, Search } from 'lucide-react';
+import { Database, Mail } from 'lucide-react';
 import { Card, PageHeader, Badge, Tabs } from '../components/ui';
 import { RulesSettingsPanel } from '../components/settings/RulesSettingsPanel';
 import { WorkflowsSettingsPanel } from '../components/settings/WorkflowsSettingsPanel';
 import { UsageSettingsPanel } from '../components/settings/UsageSettingsPanel';
 import { AIProvidersSettingsPanel } from '../components/settings/AIProvidersSettingsPanel';
+import { KnowledgeSettingsPanel } from '../components/settings/KnowledgeSettingsPanel';
+import { IntegrationsSettingsPanel } from '../components/settings/IntegrationsSettingsPanel';
+import { ExperimentsSettingsPanel } from '../components/settings/ExperimentsSettingsPanel';
+import { NotificationPrefsPanel } from '../components/settings/NotificationPrefsPanel';
 import { useAuth } from '../lib/auth';
 import { isDemoMode } from '../lib/supabase';
-import { getEmailProvider, getEmailStatus, knowledgeProvider } from '../services';
+import { getEmailProvider, getEmailStatus } from '../services';
 import { ROLE_LABELS } from '../types';
 
-const WIDE_TABS = new Set(['ai', 'rules', 'workflows', 'usage']);
+const WIDE_TABS = new Set(['ai', 'rules', 'workflows', 'usage', 'knowledge', 'integrations', 'experiments']);
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -21,12 +25,15 @@ export default function SettingsPage() {
   const tabs = useMemo(() => {
     const items = [
       { id: 'profile', label: 'โปรไฟล์' },
+      { id: 'notifications', label: 'การแจ้งเตือน' },
       { id: 'ai', label: 'AI Provider' },
       { id: 'knowledge', label: 'Knowledge' },
       { id: 'email', label: 'อีเมล' },
     ];
     if (isAdmin) {
       items.push(
+        { id: 'integrations', label: 'Integrations' },
+        { id: 'experiments', label: 'Experiments' },
         { id: 'rules', label: 'กฎควบคุม' },
         { id: 'workflows', label: 'เวิร์กโฟลว์' },
         { id: 'usage', label: 'AI Usage' },
@@ -40,7 +47,6 @@ export default function SettingsPage() {
   const normalizedTab = requestedTab === 'providers' ? 'ai' : requestedTab;
   const tab = tabs.some(t => t.id === normalizedTab) ? normalizedTab : 'profile';
 
-  const [knowledgeReady, setKnowledgeReady] = useState<boolean | null>(null);
   const [emailResult, setEmailResult] = useState('');
   const [emailStatus, setEmailStatus] = useState('กำลังตรวจสอบผู้ให้บริการอีเมล...');
   const supabaseConfigured = !isDemoMode;
@@ -52,7 +58,6 @@ export default function SettingsPage() {
   }, [requestedTab, tab, setSearchParams]);
 
   useEffect(() => {
-    knowledgeProvider.healthCheck().then(setKnowledgeReady).catch(() => setKnowledgeReady(false));
     getEmailStatus().then(status => setEmailStatus(status.message)).catch(() => setEmailStatus('ไม่สามารถตรวจสอบผู้ให้บริการอีเมลได้'));
   }, []);
 
@@ -71,17 +76,9 @@ export default function SettingsPage() {
             <div className="space-y-3 text-sm"><div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">แผนก</span><span className="font-medium">{user?.department || '-'}</span></div><div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">บัญชีสร้างเมื่อ</span><span className="font-medium">{new Date(user?.created_at || '').toLocaleDateString('th-TH')}</span></div></div>
           </Card>
         )}
+        {tab === 'notifications' && <NotificationPrefsPanel />}
         {tab === 'ai' && <AIProvidersSettingsPanel />}
-        {tab === 'knowledge' && (
-          <Card className="p-5">
-            <div className="flex items-center gap-2 mb-4"><Search className="w-5 h-5 text-primary-600" /><h3 className="font-semibold">Knowledge Provider</h3></div>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">Provider</span><span className="font-medium">{isDemoMode ? 'Lexical Demo Store' : 'Supabase pgvector'}</span></div>
-              <div className="flex justify-between py-2 border-b border-neutral-100"><span className="text-neutral-500">สถานะ</span><Badge variant={knowledgeReady ? 'success' : knowledgeReady === false ? 'error' : 'neutral'}>{knowledgeReady ? 'Ready' : knowledgeReady === false ? 'Unavailable' : 'Checking'}</Badge></div>
-              <div className="flex justify-between py-2"><span className="text-neutral-500">Knowledge Bounded</span><Badge variant="success">Supported</Badge></div>
-            </div>
-          </Card>
-        )}
+        {tab === 'knowledge' && <KnowledgeSettingsPanel />}
         {tab === 'email' && (
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-4"><Mail className="w-5 h-5 text-primary-600" /><h3 className="font-semibold">Email Provider</h3></div>
@@ -93,6 +90,8 @@ export default function SettingsPage() {
             {emailResult && <p className="text-sm text-success-600 mt-3">{emailResult}</p>}
           </Card>
         )}
+        {tab === 'integrations' && isAdmin && <IntegrationsSettingsPanel />}
+        {tab === 'experiments' && isAdmin && <ExperimentsSettingsPanel />}
         {tab === 'rules' && isAdmin && <RulesSettingsPanel />}
         {tab === 'workflows' && isAdmin && <WorkflowsSettingsPanel />}
         {tab === 'usage' && isAdmin && <UsageSettingsPanel />}

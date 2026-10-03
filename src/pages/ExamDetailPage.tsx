@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Eye, Download, Copy, Plus, FileText, KeyRound } from 'lucide-react';
 import { Card, PageHeader, Badge, Tabs, EmptyState, Spinner, Modal } from '../components/ui';
-import { getCourse, getExam, listQuestions } from '../lib/api';
+import { createExamVersion, duplicateExamVersion, getCourse, getExam, listQuestions, updateExam } from '../lib/api';
 import { QUESTION_TYPE_LABELS, BLOOM_LABELS, DIFFICULTY_LABELS, EXAM_TYPE_LABELS } from '../types';
 import type { Course, Exam, Question } from '../types';
 import {
@@ -11,6 +11,13 @@ import {
   type ExportFormat,
   type ExportKind,
 } from '../services/export/exam-export';
+
+const EXAM_STATUS_OPTIONS = [
+  { value: 'draft', label: 'ร่าง' },
+  { value: 'ready', label: 'พร้อมใช้' },
+  { value: 'published', label: 'เผยแพร่แล้ว' },
+  { value: 'archived', label: 'จัดเก็บ' },
+];
 
 export default function ExamDetailPage() {
   const { examId } = useParams();
@@ -23,12 +30,27 @@ export default function ExamDetailPage() {
   const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsForm, setSettingsForm] = useState({
+    name: '',
+    instructions: '',
+    exam_date: '',
+    duration_minutes: 60,
+    status: 'draft',
+  });
 
   useEffect(() => {
     if (!examId) { setLoading(false); return; }
     getExam(examId).then(async examRow => {
       setExam(examRow);
       if (examRow) {
+        setSettingsForm({
+          name: examRow.name,
+          instructions: examRow.instructions || '',
+          exam_date: examRow.exam_date ? examRow.exam_date.slice(0, 10) : '',
+          duration_minutes: examRow.duration_minutes,
+          status: examRow.status || 'draft',
+        });
         const [courseRow, questionRows] = await Promise.all([getCourse(examRow.course_id), listQuestions({ courseId: examRow.course_id })]);
         const byId = new Map(questionRows.map(q => [q.id, q]));
         setCourse(courseRow);
@@ -65,6 +87,58 @@ export default function ExamDetailPage() {
     }
   };
 
+  const handleCreateVersion = async () => {
+    if (!examId) return;
+    setBusy(true); setMessage(null);
+    try {
+      const updated = await createExamVersion(examId);
+      setExam(updated);
+      setMessage(`สร้างเวอร์ชัน ${updated.versions[updated.versions.length - 1]?.version_label} เรียบร้อย`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'สร้างเวอร์ชันไม่สำเร็จ');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDuplicateVersion = async (index: number) => {
+    if (!examId) return;
+    setBusy(true); setMessage(null);
+    try {
+      const updated = await duplicateExamVersion(examId, index);
+      setExam(updated);
+      setMessage(`คัดลอกเป็นเวอร์ชัน ${updated.versions[updated.versions.length - 1]?.version_label} เรียบร้อย`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'คัดลอกเวอร์ชันไม่สำเร็จ');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    if (!examId) return;
+    if (!settingsForm.name.trim()) {
+      setSettingsError('กรุณาระบุชื่อชุดข้อสอบ');
+      return;
+    }
+    setBusy(true); setSettingsError(null); setMessage(null);
+    try {
+      const updated = await updateExam(examId, {
+        name: settingsForm.name.trim(),
+        instructions: settingsForm.instructions.trim() || null,
+        exam_date: settingsForm.exam_date || null,
+        duration_minutes: Number(settingsForm.duration_minutes) || 60,
+        status: settingsForm.status,
+      });
+      setExam(updated);
+      setMessage('บันทึกตั้งค่าชุดข้อสอบเรียบร้อย');
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : 'บันทึกไม่สำเร็จ');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div>
       <Link to="/exams" className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-700 mb-4"><ArrowLeft className="w-4 h-4" /> กลับ</Link>
@@ -95,9 +169,22 @@ export default function ExamDetailPage() {
         {tab === 'versions' && (
           <div className="space-y-3">
             {exam.versions.map((v, i) => (
-              <Card key={i} className="p-5"><div className="flex items-center justify-between"><div><h3 className="font-semibold">เวอร์ชัน {v.version_label}</h3><p className="text-xs text-neutral-400">{v.questions.length} ข้อ • Shuffle: {v.shuffle_questions ? 'เปิด' : 'ปิด'} • Shuffle Choices: {v.shuffle_choices ? 'เปิด' : 'ปิด'}</p></div><div className="flex gap-2"><button className="btn-secondary" onClick={() => { setPreviewKind('exam'); setTab('preview'); }}><Eye className="w-4 h-4" /></button><button className="btn-secondary"><Copy className="w-4 h-4" /></button></div></div></Card>
+              <Card key={`${v.version_label}-${i}`} className="p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-semibold">เวอร์ชัน {v.version_label}</h3>
+                    <p className="text-xs text-neutral-400">{v.questions.length} ข้อ • Shuffle: {v.shuffle_questions ? 'เปิด' : 'ปิด'} • Shuffle Choices: {v.shuffle_choices ? 'เปิด' : 'ปิด'}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" className="btn-secondary" onClick={() => { setPreviewKind('exam'); setTab('preview'); }}><Eye className="w-4 h-4" /></button>
+                    <button type="button" className="btn-secondary" disabled={busy} onClick={() => handleDuplicateVersion(i)} title="คัดลอกเวอร์ชัน"><Copy className="w-4 h-4" /></button>
+                  </div>
+                </div>
+              </Card>
             ))}
-            <button className="btn-primary"><Plus className="w-4 h-4" /> สร้างเวอร์ชันใหม่</button>
+            <button type="button" className="btn-primary" disabled={busy} onClick={handleCreateVersion}>
+              <Plus className="w-4 h-4" /> สร้างเวอร์ชันใหม่
+            </button>
           </div>
         )}
         {tab === 'preview' && (
@@ -110,7 +197,42 @@ export default function ExamDetailPage() {
           </Card>
         )}
         {tab === 'settings' && (
-          <Card className="p-5"><p className="text-sm text-neutral-500">ตั้งค่าชุดข้อสอบ — แก้ไขชื่อ คำสั่ง วันสอบ และสถานะ</p></Card>
+          <Card className="p-5 space-y-4 max-w-2xl">
+            <p className="text-sm text-neutral-500">แก้ไขชื่อ คำสั่ง วันสอบ ระยะเวลา และสถานะของชุดข้อสอบ</p>
+            <div>
+              <label className="label">ชื่อชุดข้อสอบ</label>
+              <input className="input" value={settingsForm.name} onChange={e => setSettingsForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">คำชี้แจง</label>
+              <textarea className="input min-h-24" value={settingsForm.instructions} onChange={e => setSettingsForm(f => ({ ...f, instructions: e.target.value }))} />
+            </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="label">วันสอบ</label>
+                <input type="date" className="input" value={settingsForm.exam_date} onChange={e => setSettingsForm(f => ({ ...f, exam_date: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">ระยะเวลา (นาที)</label>
+                <input type="number" min={1} className="input" value={settingsForm.duration_minutes} onChange={e => setSettingsForm(f => ({ ...f, duration_minutes: Number(e.target.value) || 0 }))} />
+              </div>
+            </div>
+            <div>
+              <label className="label">สถานะ</label>
+              <select className="input" value={settingsForm.status} onChange={e => setSettingsForm(f => ({ ...f, status: e.target.value }))}>
+                {EXAM_STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                {!EXAM_STATUS_OPTIONS.some(o => o.value === settingsForm.status) && (
+                  <option value={settingsForm.status}>{settingsForm.status}</option>
+                )}
+              </select>
+            </div>
+            {settingsError && <p className="text-sm text-error-600">{settingsError}</p>}
+            <div className="flex justify-end">
+              <button type="button" className="btn-primary" disabled={busy} onClick={handleSaveSettings}>
+                {busy ? <Spinner size="sm" /> : 'บันทึกตั้งค่า'}
+              </button>
+            </div>
+          </Card>
         )}
       </div>
 

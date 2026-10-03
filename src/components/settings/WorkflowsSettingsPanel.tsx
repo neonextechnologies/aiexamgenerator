@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, CheckCircle2, GitBranch, Plus, UserCheck } from 'lucide-react';
+import { Bot, CheckCircle2, GitBranch, GripVertical, Plus, UserCheck } from 'lucide-react';
 import { Badge, Card, Modal, Spinner } from '../ui';
 import { ruleEngine, workflowEngine } from '../../services';
 import { normalizeStepCode, WORKFLOW_STEP_TEMPLATES } from '../../lib/workflow-catalog';
@@ -40,6 +40,8 @@ export function WorkflowsSettingsPanel() {
   const [message, setMessage] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reordering, setReordering] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
   const [form, setForm] = useState<StepFormState>(defaultForm());
 
   const templateOptions = useMemo(() => [
@@ -143,6 +145,40 @@ export function WorkflowsSettingsPanel() {
     }
   };
 
+  const persistOrder = async (ordered: WorkflowStepDef[]) => {
+    if (!versionId) return;
+    setReordering(true);
+    setError('');
+    try {
+      const next = await workflowEngine.reorderSteps(versionId, ordered.map(step => step.id));
+      setSteps(next);
+      setMessage('จัดลำดับขั้นตอนเรียบร้อย');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'จัดลำดับไม่สำเร็จ');
+      await loadSteps(selectedWorkflowId);
+    } finally {
+      setReordering(false);
+    }
+  };
+
+  const onDragStart = (stepId: string) => setDragId(stepId);
+
+  const onDropOn = async (targetId: string) => {
+    if (!dragId || dragId === targetId) {
+      setDragId(null);
+      return;
+    }
+    const from = steps.findIndex(step => step.id === dragId);
+    const to = steps.findIndex(step => step.id === targetId);
+    setDragId(null);
+    if (from < 0 || to < 0) return;
+    const next = [...steps];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setSteps(next);
+    await persistOrder(next);
+  };
+
   if (loading && !steps.length && !workflows.length) {
     return <div className="flex justify-center py-12"><Spinner size="lg" /></div>;
   }
@@ -175,7 +211,7 @@ export function WorkflowsSettingsPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div>
             <h2 className="font-semibold">ขั้นตอน Workflow</h2>
-            {versionId && <p className="text-xs text-neutral-500 mt-1">Version: {versionId}</p>}
+            {versionId && <p className="text-xs text-neutral-500 mt-1">Version: {versionId} • ลากเพื่อจัดลำดับ</p>}
           </div>
           <button type="button" className="btn-primary" onClick={openCreateModal} disabled={!versionId}>
             <Plus className="w-4 h-4" /> เพิ่มขั้นตอน
@@ -191,13 +227,21 @@ export function WorkflowsSettingsPanel() {
         ) : (
           <div className="relative space-y-3">
             {steps.map((step, index) => (
-              <div key={step.id} className="relative flex gap-4">
+              <div
+                key={step.id}
+                className={`relative flex gap-4 ${dragId === step.id ? 'opacity-60' : ''}`}
+                draggable={!reordering}
+                onDragStart={() => onDragStart(step.id)}
+                onDragOver={event => event.preventDefault()}
+                onDrop={() => onDropOn(step.id)}
+              >
                 <div className="flex flex-col items-center">
                   <div className="w-9 h-9 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-sm font-bold">{index + 1}</div>
                   {index < steps.length - 1 && <div className="w-px flex-1 bg-neutral-200 min-h-8" />}
                 </div>
-                <div className="flex-1 border border-neutral-200 rounded-lg p-3 mb-2">
+                <div className="flex-1 border border-neutral-200 rounded-lg p-3 mb-2 bg-white cursor-grab active:cursor-grabbing">
                   <div className="flex flex-wrap items-center gap-2">
+                    <GripVertical className="w-4 h-4 text-neutral-400" />
                     <p className="font-medium text-sm flex-1">{step.name}</p>
                     <Badge variant="neutral">{step.code}</Badge>
                     <Badge variant="neutral">#{step.sort_order}</Badge>
@@ -212,6 +256,7 @@ export function WorkflowsSettingsPanel() {
           </div>
         )}
 
+        {reordering && <p className="text-sm text-neutral-500 mt-4">กำลังบันทึกลำดับ...</p>}
         {message && <p className="text-sm text-success-600 mt-4">{message}</p>}
         {error && !modalOpen && <p className="text-sm text-error-600 mt-4">{error}</p>}
       </Card>

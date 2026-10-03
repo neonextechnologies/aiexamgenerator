@@ -75,6 +75,8 @@ export interface WorkflowEngine {
   getPublishedVersion(workflowId: string): Promise<string | null>;
   getSteps(workflowVersionId: string): Promise<WorkflowStepDef[]>;
   createStep(input: CreateWorkflowStepInput): Promise<WorkflowStepDef>;
+  updateStepOrder(stepId: string, sortOrder: number): Promise<void>;
+  reorderSteps(versionId: string, orderedStepIds: string[]): Promise<WorkflowStepDef[]>;
   startRun(input: {
     workflowId: string;
     mode: string;
