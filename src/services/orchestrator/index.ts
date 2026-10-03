@@ -1,4 +1,4 @@
-import type { GenerationV2Request, GenerationV2Result, AIProviderConfig, QuestionTypeDef, DifficultyDefinition } from '../../types/v2';
+import type { GenerationV2Request, GenerationV2Result, AIProviderConfig, QuestionTypeDef, DifficultyDefinition, GenerationMode } from '../../types/v2';
 import type { AIOrchestrator, GenerationProgressUpdate } from '../types';
 import { isDemoMode, supabase } from '../../lib/supabase';
 import { invokeEdgeFunction } from '../../lib/edge';
@@ -8,7 +8,7 @@ import { verificationEngine } from '../verification';
 import { analysisEngine } from '../workflows/analysis';
 import { workflowEngine } from '../workflows';
 import { DemoAIProvider } from '../../lib/ai-provider';
-import { insertQuestions, createGenerationJob, updateGenerationJob, createUsageLog, createNotification, listQuestions } from '../../lib/api';
+import { insertQuestions, createGenerationJob, updateGenerationJob, getGenerationJob, createUsageLog, createNotification, listQuestions } from '../../lib/api';
 import type { GenerationJob, Question } from '../../types';
 import { contentHashForQuestion } from '../duplicates';
 import { ensureRubricForQuestion, normalizeRubric } from '../rubric';
@@ -528,12 +528,167 @@ async function runLocalPipeline(
   return successResult;
 }
 
+async function enqueueGenerationJob(request: GenerationV2Request): Promise<string> {
+  const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const knowledgeBounded = request.knowledgeBounded !== false;
+  const now = new Date().toISOString();
+  await createGenerationJob({
+    id: jobId,
+    course_id: request.courseId,
+    blueprint_id: request.blueprintId || null,
+    document_ids: request.documentIds,
+    learning_outcome_ids: request.learningOutcomeIds,
+    question_type: request.questionType as Question['question_type'],
+    bloom_level: request.bloomLevel as Question['intended_bloom_level'],
+    difficulty: request.difficulty as Question['intended_difficulty'],
+    number_of_questions: request.numberOfQuestions,
+    language: request.language,
+    marks_per_question: request.marksPerQuestion,
+    include_explanation: request.includeExplanation,
+    include_rubric: request.includeRubric,
+    status: 'queued',
+    generated_count: 0,
+    failed_count: 0,
+    total_questions: request.numberOfQuestions,
+    created_by: request.createdBy,
+    created_at: now,
+    progress_pct: 0,
+    current_stage: 'QUEUED',
+    stage_message: STAGE_PROGRESS.QUEUED.message,
+    request_json: request as unknown as Record<string, unknown>,
+    mode: request.mode,
+    provider_id: request.providerId || null,
+    knowledge_bounded: knowledgeBounded,
+    rule_set_id: request.ruleSetId || 'rs-system-default',
+    attempt_count: 0,
+    max_attempts: 3,
+  });
+  return jobId;
+}
+
+async function wakeGenerationWorker(jobId: string): Promise<void> {
+  // Fire-and-forget: edge returns 202 and continues via EdgeRuntime.waitUntil.
+  // Closing the browser after this request is accepted must not stop the worker.
+  try {
+    await invokeEdgeFunction('process-generation-job', { action: 'wake', jobId });
+  } catch {
+    // pg_cron / manual claim_and_process remains the safety net.
+  }
+}
+
+async function waitForGenerationJob(
+  jobId: string,
+  options: {
+    onProgress?: (update: GenerationProgressUpdate) => void;
+    pollMs?: number;
+    timeoutMs?: number;
+  } = {},
+): Promise<GenerationV2Result> {
+  const pollMs = options.pollMs ?? 1500;
+  const timeoutMs = options.timeoutMs ?? 15 * 60_000;
+  const started = Date.now();
+  let lastStage = '';
+
+  while (Date.now() - started < timeoutMs) {
+    const job = await getGenerationJob(jobId);
+    if (!job) {
+      return {
+        success: false,
+        status: 'failed',
+        mode: 'ai',
+        executionId: `exec-missing-${jobId}`,
+        questions: [],
+        error: `ไม่พบงาน ${jobId}`,
+      };
+    }
+
+    const stage = job.current_stage || job.status;
+    if (stage !== lastStage || job.progress_pct != null) {
+      lastStage = stage;
+      options.onProgress?.({
+        progressPct: job.progress_pct ?? 0,
+        currentStage: job.current_stage || job.status,
+        stageMessage: job.stage_message || undefined,
+        jobId,
+        status: job.status,
+      });
+    }
+
+    if (job.status === 'completed') {
+      const result = (job.result_json || {}) as unknown as GenerationV2Result;
+      return {
+        success: true,
+        status: 'completed',
+        mode: (result.mode as GenerationMode) || (job.mode as GenerationMode) || 'ai',
+        executionId: result.executionId || `exec-${jobId}`,
+        workflowRunId: result.workflowRunId,
+        evidencePack: result.evidencePack,
+        analysis: result.analysis,
+        questions: result.questions || [],
+        savedQuestions: result.savedQuestions || [],
+        verification: result.verification,
+        ruleEvaluation: result.ruleEvaluation,
+        usage: result.usage,
+      };
+    }
+
+    if (job.status === 'failed') {
+      const result = (job.result_json || {}) as unknown as GenerationV2Result;
+      return {
+        success: false,
+        status: result.insufficientEvidence ? 'INSUFFICIENT_EVIDENCE' : 'failed',
+        mode: (job.mode as GenerationMode) || 'ai',
+        executionId: result.executionId || `exec-${jobId}`,
+        questions: [],
+        savedQuestions: [],
+        insufficientEvidence: result.insufficientEvidence,
+        error: job.error_message || job.last_error || result.error || 'งานสร้างข้อสอบล้มเหลว',
+        evidencePack: result.evidencePack,
+        analysis: result.analysis,
+      };
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollMs));
+  }
+
+  return {
+    success: false,
+    status: 'failed',
+    mode: 'ai',
+    executionId: `exec-timeout-${jobId}`,
+    questions: [],
+    error: 'หมดเวลารอผลจาก background worker — งานอาจยังรันอยู่ที่หน้าประวัติงานสร้างข้อสอบ',
+  };
+}
+
 export const aiOrchestrator: AIOrchestrator = {
+  async enqueueGeneration(request) {
+    const jobId = await enqueueGenerationJob(request);
+    if (!isDemoMode) await wakeGenerationWorker(jobId);
+    return { jobId };
+  },
+
+  async waitForJob(jobId, options) {
+    return waitForGenerationJob(jobId, options);
+  },
+
   async runGeneration(request, options) {
-    // Always run the local pipeline first so retrieve → analyze → generate
-    // carries a real evidence pack into the edge generate call.
-    // (Calling edge `orchestrate` without evidence broke knowledge-bounded mode.)
-    return runLocalPipeline(request, options);
+    // Demo mode has no edge worker — keep in-process pipeline.
+    if (isDemoMode || !supabase) {
+      return runLocalPipeline(request, options);
+    }
+
+    // Real mode: enqueue only; detached worker runs retrieve→analyze→generate→verify.
+    const jobId = await enqueueGenerationJob(request);
+    options?.onProgress?.({
+      progressPct: 0,
+      currentStage: 'QUEUED',
+      stageMessage: 'ใส่คิวแล้ว — worker กำลังทำงานแม้ปิดเบราว์เซอร์',
+      jobId,
+      status: 'queued',
+    });
+    await wakeGenerationWorker(jobId);
+    return waitForGenerationJob(jobId, options);
   },
 
   async listProviders() {

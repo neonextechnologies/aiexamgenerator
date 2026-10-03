@@ -211,8 +211,8 @@ export default function GenerateWizardV2() {
             {generating ? (
               <div className="py-10 text-center">
                 <Sparkles className="w-10 h-10 text-primary-500 mx-auto animate-pulse" />
-                <p className="text-sm text-neutral-500 mt-4 mb-1">กำลังดำเนินการผ่าน Orchestrator...</p>
-                <p className="text-xs text-neutral-400 mb-3">{progressStage || 'เริ่มต้น'} · {progressPct}%</p>
+                <p className="text-sm text-neutral-500 mt-4 mb-1">กำลังสร้างบน background worker...</p>
+                <p className="text-xs text-neutral-400 mb-3">ปิดหน้าต่างได้ — งานยังรันต่อที่เซิร์ฟเวอร์ · {progressStage || 'เริ่มต้น'} · {progressPct}%</p>
                 <ProgressBar value={progressPct} />
               </div>
             ) : result?.success ? (

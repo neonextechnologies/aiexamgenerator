@@ -88,6 +88,8 @@ export default function GenerationJobsPage() {
                     <p className="text-sm font-medium text-neutral-900">{j.generated_count}/{j.total_questions} ข้อ</p>
                     {j.failed_count > 0 && <p className="text-xs text-error-500">{j.failed_count} ข้อล้มเหลว</p>}
                     {j.estimated_cost_usd != null && <p className="text-xs text-neutral-400">${j.estimated_cost_usd.toFixed(2)}</p>}
+                    {(j.attempt_count ?? 0) > 0 && <p className="text-xs text-neutral-400">attempt {j.attempt_count}/{j.max_attempts ?? 3}</p>}
+                    {j.locked_by && j.status === 'running' && <p className="text-xs text-primary-600">worker: {j.locked_by}</p>}
                   </div>
                 </div>
               </Card>

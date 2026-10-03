@@ -121,7 +121,12 @@ export interface GenerationProgressUpdate {
 export interface AIOrchestrator {
   runGeneration(
     request: GenerationV2Request,
-    options?: { onProgress?: (update: GenerationProgressUpdate) => void },
+    options?: { onProgress?: (update: GenerationProgressUpdate) => void; pollMs?: number; timeoutMs?: number },
+  ): Promise<GenerationV2Result>;
+  enqueueGeneration(request: GenerationV2Request): Promise<{ jobId: string }>;
+  waitForJob(
+    jobId: string,
+    options?: { onProgress?: (update: GenerationProgressUpdate) => void; pollMs?: number; timeoutMs?: number },
   ): Promise<GenerationV2Result>;
   listProviders(): Promise<AIProviderConfig[]>;
   listQuestionTypes(): Promise<QuestionTypeDef[]>;

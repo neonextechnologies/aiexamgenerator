@@ -83,6 +83,12 @@ export interface GenerationJob {
   knowledge_bounded?: boolean | null;
   rule_set_id?: string | null;
   workflow_run_id?: string | null;
+  attempt_count?: number | null;
+  max_attempts?: number | null;
+  locked_at?: string | null;
+  locked_by?: string | null;
+  last_error?: string | null;
+  worker_heartbeat_at?: string | null;
 }
 export interface QuestionReview { id: string; question_id: string; reviewer_id: string; reviewer_name: string; decision: 'approved'|'rejected'|'revision_requested'; comment: string; confirmed_bloom?: BloomLevel | null; confirmed_difficulty?: DifficultyLevel | null; created_at: string; }
 export interface Notification { id: string; user_id: string; type: string; title: string; message: string; link?: string | null; read: boolean; created_at: string; }

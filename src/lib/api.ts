@@ -741,6 +741,15 @@ export async function createGenerationJob(job: GenerationJob): Promise<Generatio
   return data as GenerationJob;
 }
 
+export async function getGenerationJob(id: string): Promise<GenerationJob | null> {
+  if (isDemoMode || !supabase) {
+    return demoStore.generationJobs.find(job => job.id === id) ?? null;
+  }
+  const { data, error } = await requireClient().from('generation_jobs').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return (data as GenerationJob | null) ?? null;
+}
+
 export async function updateGenerationJob(
   id: string,
   patch: Partial<GenerationJob>,
