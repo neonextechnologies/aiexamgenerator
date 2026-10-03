@@ -29,6 +29,7 @@ services:
   db:
     <<: *restart
     image: aiexam-db:local
+    pull_policy: build
     build:
       context: ./db
       dockerfile: Dockerfile
@@ -179,7 +180,7 @@ services:
       imgproxy:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5000/status"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -237,6 +238,7 @@ services:
   functions:
     <<: *restart
     image: aiexam-functions:local
+    pull_policy: build
     build:
       context: ..
       dockerfile: deploy/functions/Dockerfile
@@ -289,6 +291,7 @@ services:
   kong:
     <<: *restart
     image: aiexam-kong:local
+    pull_policy: build
     build:
       context: ./kong
       dockerfile: Dockerfile
@@ -358,6 +361,7 @@ services:
   studio-proxy:
     <<: *restart
     image: aiexam-studio-proxy:local
+    pull_policy: build
     build:
       context: ./studio-proxy
       dockerfile: Dockerfile
@@ -375,6 +379,7 @@ services:
 
   migrate:
     image: aiexam-migrate:local
+    pull_policy: build
     build:
       context: ..
       dockerfile: deploy/migrate/Dockerfile
@@ -398,6 +403,7 @@ services:
   app:
     <<: *restart
     image: aiexam-app:local
+    pull_policy: build
     build:
       context: ..
       dockerfile: deploy/app/Dockerfile
