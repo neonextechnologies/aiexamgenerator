@@ -6,6 +6,7 @@ import { RulesSettingsPanel } from '../components/settings/RulesSettingsPanel';
 import { WorkflowsSettingsPanel } from '../components/settings/WorkflowsSettingsPanel';
 import { UsageSettingsPanel } from '../components/settings/UsageSettingsPanel';
 import { PricingSettingsPanel } from '../components/settings/PricingSettingsPanel';
+import { PromptsSettingsPanel } from '../components/settings/PromptsSettingsPanel';
 import { AIProvidersSettingsPanel } from '../components/settings/AIProvidersSettingsPanel';
 import { KnowledgeSettingsPanel } from '../components/settings/KnowledgeSettingsPanel';
 import { IntegrationsSettingsPanel } from '../components/settings/IntegrationsSettingsPanel';
@@ -16,7 +17,7 @@ import { isDemoMode } from '../lib/supabase';
 import { getEmailProvider, getEmailStatus } from '../services';
 import { ROLE_LABELS } from '../types';
 
-const WIDE_TABS = new Set(['ai', 'rules', 'workflows', 'usage', 'pricing', 'knowledge', 'integrations', 'experiments']);
+const WIDE_TABS = new Set(['ai', 'rules', 'workflows', 'usage', 'pricing', 'prompts', 'knowledge', 'integrations', 'experiments']);
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -39,6 +40,7 @@ export default function SettingsPage() {
         { id: 'workflows', label: 'เวิร์กโฟลว์' },
         { id: 'usage', label: 'AI Usage' },
         { id: 'pricing', label: 'ราคาโมเดล' },
+        { id: 'prompts', label: 'Prompts' },
       );
     }
     items.push({ id: 'system', label: 'ระบบ' });
@@ -98,6 +100,7 @@ export default function SettingsPage() {
         {tab === 'workflows' && isAdmin && <WorkflowsSettingsPanel />}
         {tab === 'usage' && isAdmin && <UsageSettingsPanel />}
         {tab === 'pricing' && isAdmin && <PricingSettingsPanel />}
+        {tab === 'prompts' && isAdmin && <PromptsSettingsPanel />}
         {tab === 'system' && (
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-4"><Database className="w-5 h-5 text-primary-600" /><h3 className="font-semibold">System Status</h3></div>
