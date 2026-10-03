@@ -1,5 +1,11 @@
 export type LlmProviderType = 'openai' | 'openai_compatible' | 'gemini' | 'anthropic';
 
+export interface ModelPricingRates {
+  inputUsdPer1m: number;
+  outputUsdPer1m: number;
+  embeddingUsdPer1m?: number | null;
+}
+
 export interface ProviderRow {
   id?: string;
   name?: string;
@@ -8,11 +14,16 @@ export interface ProviderRow {
   base_url?: string | null;
   default_model?: string | null;
   generation_model?: string | null;
+  analysis_model?: string | null;
+  verification_model?: string | null;
+  embedding_model?: string | null;
   temperature?: number | null;
   max_tokens?: number | null;
   timeout_ms?: number | null;
   secret_ref?: string | null;
   encrypted_api_key?: string | null;
+  key_encryption?: string | null;
+  key_hint?: string | null;
 }
 
 export interface LlmRequest {
@@ -28,6 +39,8 @@ export interface LlmRequest {
   jsonMode?: boolean;
   organizationId?: string | null;
   projectId?: string | null;
+  /** Optional per-model rates from ai_model_pricing; defaults used when omitted. */
+  rates?: ModelPricingRates | null;
 }
 
 export interface LlmUsage {
@@ -111,8 +124,109 @@ export class LlmProviderError extends Error {
   }
 }
 
-export function estimateCostUsd(inputTokens: number, outputTokens: number): number {
-  return (inputTokens * 0.0000025) + (outputTokens * 0.00001);
+/** Default rates used when no pricing row is available (USD per token). */
+export const DEFAULT_INPUT_USD_PER_TOKEN = 0.0000025;
+export const DEFAULT_OUTPUT_USD_PER_TOKEN = 0.00001;
+
+export function estimateCostUsd(
+  inputTokens: number,
+  outputTokens: number,
+  rates?: ModelPricingRates | null,
+): number {
+  const inputPer = rates ? rates.inputUsdPer1m / 1_000_000 : DEFAULT_INPUT_USD_PER_TOKEN;
+  const outputPer = rates ? rates.outputUsdPer1m / 1_000_000 : DEFAULT_OUTPUT_USD_PER_TOKEN;
+  return (inputTokens * inputPer) + (outputTokens * outputPer);
+}
+
+export function estimateEmbeddingCostUsd(tokens: number, rates?: ModelPricingRates | null): number {
+  const per = rates?.embeddingUsdPer1m != null
+    ? rates.embeddingUsdPer1m / 1_000_000
+    : 0.00000002;
+  return tokens * per;
+}
+
+export const EMBEDDING_TARGET_DIMS = 1536;
+
+export function padOrTrimEmbedding(values: number[], dims = EMBEDDING_TARGET_DIMS): number[] {
+  if (values.length === dims) return values;
+  if (values.length > dims) return values.slice(0, dims);
+  return [...values, ...Array(dims - values.length).fill(0)];
+}
+
+export async function createEmbedding(input: {
+  providerType: LlmProviderType;
+  apiKey: string;
+  model: string;
+  baseUrl?: string | null;
+  text: string;
+  timeoutMs?: number;
+  organizationId?: string | null;
+  projectId?: string | null;
+}, fetchImpl: typeof fetch = fetch): Promise<{ embedding: number[]; model: string; tokens: number }> {
+  const text = input.text.slice(0, 8000);
+  if (!input.apiKey.trim()) {
+    throw new LlmProviderError('ไม่มี API key สำหรับสร้าง embeddings', { status: 401, provider: input.providerType });
+  }
+  if (input.providerType === 'anthropic') {
+    throw new LlmProviderError('Anthropic ไม่รองรับ embeddings — เลือก OpenAI/Gemini/compatible', {
+      status: 400,
+      provider: input.providerType,
+    });
+  }
+  if (input.providerType === 'gemini') {
+    const model = input.model || 'text-embedding-004';
+    const url = `${defaultBaseUrl('gemini', input.baseUrl, {})}/models/${model}:embedContent?key=${encodeURIComponent(input.apiKey)}`;
+    const response = await fetchWithTimeout(fetchImpl, url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: { parts: [{ text }] } }),
+    }, input.timeoutMs || 60_000, 'gemini');
+    const rawText = await response.text();
+    if (!response.ok) {
+      throw new LlmProviderError(`Gemini embedding HTTP ${response.status}`, {
+        status: response.status,
+        details: redactSecrets(rawText, input.apiKey).slice(0, 200),
+        provider: 'gemini',
+      });
+    }
+    const data = parseJsonObject(rawText, {
+      providerType: 'gemini', apiKey: input.apiKey, model, system: '', user: '',
+    });
+    const values = (asRecord(data.embedding)?.values as number[]) || [];
+    return { embedding: padOrTrimEmbedding(values), model, tokens: Math.ceil(text.length / 4) };
+  }
+
+  const model = input.model || 'text-embedding-3-small';
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${input.apiKey}`,
+    'content-type': 'application/json',
+  };
+  if (input.organizationId) headers['OpenAI-Organization'] = input.organizationId;
+  if (input.projectId) headers['OpenAI-Project'] = input.projectId;
+  const response = await fetchWithTimeout(fetchImpl, joinUrl(defaultBaseUrl(input.providerType, input.baseUrl, {}), '/embeddings'), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model, input: text }),
+  }, input.timeoutMs || 60_000, input.providerType);
+  const rawText = await response.text();
+  if (!response.ok) {
+    throw new LlmProviderError(`Embedding HTTP ${response.status}`, {
+      status: response.status,
+      details: redactSecrets(rawText, input.apiKey).slice(0, 200),
+      provider: input.providerType,
+    });
+  }
+  const data = parseJsonObject(rawText, {
+    providerType: input.providerType, apiKey: input.apiKey, model, system: '', user: '',
+  });
+  const first = Array.isArray(data.data) ? asRecord(data.data[0]) : null;
+  const values = (first?.embedding as number[]) || [];
+  const usage = asRecord(data.usage);
+  return {
+    embedding: padOrTrimEmbedding(values),
+    model,
+    tokens: numberField(usage?.total_tokens) || Math.ceil(text.length / 4),
+  };
 }
 
 export function decodeStoredSecret(encoded?: string | null): string {
@@ -651,7 +765,7 @@ function usageRow(req: LlmRequest, inputTokens: number, outputTokens: number, to
     outputTokens,
     totalTokens,
     latencyMs,
-    estimatedCostUsd: estimateCostUsd(inputTokens, outputTokens),
+    estimatedCostUsd: estimateCostUsd(inputTokens, outputTokens, req.rates),
   };
 }
 

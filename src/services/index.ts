@@ -1,5 +1,7 @@
 export { aiOrchestrator } from './orchestrator';
 export { aiProviderService } from './ai-providers';
+export { pricingService } from './pricing';
+export type { ModelPricing } from './pricing';
 export { knowledgeProvider } from './knowledge';
 export { ruleEngine, evaluateRules, simpleHash } from './rules';
 export type { CreateRuleInput, CreateWorkflowStepInput } from './types';

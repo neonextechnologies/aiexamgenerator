@@ -2,6 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import {
   buildUsageLogRow,
   completeJson,
+  estimateCostUsd,
   extractQuestions,
   LlmProviderError,
   missingKeyMessage,
@@ -9,6 +10,7 @@ import {
   resolveProviderConfig,
   type LlmCompletion,
   type LlmUsage,
+  type ModelPricingRates,
   type ProviderRow,
   type ResolvedLlmProvider,
 } from "../../../src/services/ai-providers/llm-client.ts";
@@ -87,6 +89,44 @@ export interface FailedGeneration {
   status: number;
 }
 
+async function fetchModelRates(
+  supabase: SupabaseAdmin,
+  providerType: string,
+  model: string,
+): Promise<ModelPricingRates | null> {
+  try {
+    const { data: exact } = await supabase
+      .from("ai_model_pricing")
+      .select("input_usd_per_1m, output_usd_per_1m, embedding_usd_per_1m")
+      .eq("provider_type", providerType)
+      .eq("model", model)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (exact) {
+      return {
+        inputUsdPer1m: Number(exact.input_usd_per_1m),
+        outputUsdPer1m: Number(exact.output_usd_per_1m),
+        embeddingUsdPer1m: exact.embedding_usd_per_1m != null ? Number(exact.embedding_usd_per_1m) : null,
+      };
+    }
+    const { data: byProvider } = await supabase
+      .from("ai_model_pricing")
+      .select("input_usd_per_1m, output_usd_per_1m, embedding_usd_per_1m")
+      .eq("provider_type", providerType)
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+    if (!byProvider) return null;
+    return {
+      inputUsdPer1m: Number(byProvider.input_usd_per_1m),
+      outputUsdPer1m: Number(byProvider.output_usd_per_1m),
+      embeddingUsdPer1m: byProvider.embedding_usd_per_1m != null ? Number(byProvider.embedding_usd_per_1m) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function completeAndLog(
   supabase: SupabaseAdmin,
   config: ResolvedLlmProvider,
@@ -96,6 +136,7 @@ export async function completeAndLog(
     return { ok: false, demo: true, status: 503, error: config.reason || missingKeyMessage(config) };
   }
   const providerType = config.providerType;
+  const rates = await fetchModelRates(supabase, providerType, config.model);
 
   try {
     const completion = await completeJson({
@@ -111,7 +152,16 @@ export async function completeAndLog(
       jsonMode: true,
       organizationId: config.organizationId,
       projectId: config.projectId,
+      rates,
     });
+    // Recompute with DB rates in case caller path omitted them.
+    if (rates) {
+      completion.usage.estimatedCostUsd = estimateCostUsd(
+        completion.usage.inputTokens,
+        completion.usage.outputTokens,
+        rates,
+      );
+    }
     await writeUsage(supabase, input, completion.usage, "success");
     return {
       ok: true,
