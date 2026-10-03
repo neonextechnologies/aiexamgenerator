@@ -75,6 +75,8 @@ export interface WorkflowEngine {
   getPublishedVersion(workflowId: string): Promise<string | null>;
   getSteps(workflowVersionId: string): Promise<WorkflowStepDef[]>;
   createStep(input: CreateWorkflowStepInput): Promise<WorkflowStepDef>;
+  updateStepOrder(stepId: string, sortOrder: number): Promise<void>;
+  reorderSteps(versionId: string, orderedStepIds: string[]): Promise<WorkflowStepDef[]>;
   startRun(input: {
     workflowId: string;
     mode: string;
@@ -108,8 +110,24 @@ export interface AnalysisEngine {
   analyze(request: GenerationV2Request, evidence: EvidencePack): Promise<AnalysisDecision>;
 }
 
+export interface GenerationProgressUpdate {
+  progressPct: number;
+  currentStage: string;
+  stageMessage?: string;
+  jobId?: string;
+  status?: string;
+}
+
 export interface AIOrchestrator {
-  runGeneration(request: GenerationV2Request): Promise<GenerationV2Result>;
+  runGeneration(
+    request: GenerationV2Request,
+    options?: { onProgress?: (update: GenerationProgressUpdate) => void; pollMs?: number; timeoutMs?: number },
+  ): Promise<GenerationV2Result>;
+  enqueueGeneration(request: GenerationV2Request): Promise<{ jobId: string }>;
+  waitForJob(
+    jobId: string,
+    options?: { onProgress?: (update: GenerationProgressUpdate) => void; pollMs?: number; timeoutMs?: number },
+  ): Promise<GenerationV2Result>;
   listProviders(): Promise<AIProviderConfig[]>;
   listQuestionTypes(): Promise<QuestionTypeDef[]>;
   listDifficulties(): Promise<DifficultyDefinition[]>;

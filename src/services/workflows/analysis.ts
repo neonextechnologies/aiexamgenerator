@@ -1,5 +1,7 @@
 import type { AnalysisDecision, EvidencePack, GenerationV2Request } from '../../types/v2';
 import type { AnalysisEngine } from '../types';
+import { isDemoMode } from '../../lib/supabase';
+import { invokeEdgeFunction } from '../../lib/edge';
 
 export function analyzeGenerationRequest(request: GenerationV2Request, evidence: EvidencePack): AnalysisDecision {
   const reasons: string[] = [];
@@ -30,9 +32,9 @@ export function analyzeGenerationRequest(request: GenerationV2Request, evidence:
   }
 
   if (evidence.coverageScore < 0.4) {
-    reasons.push('ความครอบคลุมหลักฐานต่ำ — แนะนำลดจำนวนข้อหรือเพิ่มเอกสาร');
+    reasons.push('[Heuristic] ความครอบคลุมหลักฐานต่ำ — แนะนำลดจำนวนข้อหรือเพิ่มเอกสาร');
   } else {
-    reasons.push('หลักฐานเพียงพอสำหรับการสร้างข้อสอบแบบควบคุม');
+    reasons.push('[Heuristic] หลักฐานเพียงพอสำหรับการสร้างข้อสอบแบบควบคุม');
   }
 
   const plan = Array.from({ length: request.numberOfQuestions }).map((_, i) => ({
@@ -58,6 +60,28 @@ export function analyzeGenerationRequest(request: GenerationV2Request, evidence:
 
 export const analysisEngine: AnalysisEngine = {
   async analyze(request, evidence) {
+    if (!isDemoMode) {
+      try {
+        const { ok, data } = await invokeEdgeFunction<AnalysisDecision & { modelBased?: boolean; heuristicFallback?: boolean }>(
+          'exam-engine',
+          { action: 'analyze', request, evidencePack: evidence, providerId: request.providerId },
+        );
+        if (ok && data.decision) {
+          return {
+            decision: data.decision,
+            reason: data.reason || [],
+            coverage: data.coverage || {},
+            recommendedQuestionTypes: data.recommendedQuestionTypes || [request.questionType],
+            recommendedBloomLevels: data.recommendedBloomLevels || [request.bloomLevel],
+            recommendedDifficulty: data.recommendedDifficulty || [request.difficulty],
+            generationPlan: data.generationPlan || [],
+            insufficientEvidence: data.insufficientEvidence,
+          };
+        }
+      } catch {
+        // heuristic fallback
+      }
+    }
     return analyzeGenerationRequest(request, evidence);
   },
 };

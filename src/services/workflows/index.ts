@@ -131,6 +131,55 @@ export const workflowEngine: WorkflowEngine = {
     return data as WorkflowStepDef;
   },
 
+  async updateStepOrder(stepId, sortOrder) {
+    if (isDemoMode || !supabase) {
+      const custom = readCustomSteps();
+      const idx = custom.findIndex(step => step.id === stepId);
+      if (idx >= 0) {
+        custom[idx] = { ...custom[idx], sort_order: sortOrder };
+        writeCustomSteps(custom);
+        return;
+      }
+      // Persist override for built-in demo steps
+      const base = DEMO_STEPS.find(step => step.id === stepId);
+      if (!base) throw new Error('ไม่พบขั้นตอน');
+      custom.push({ ...base, sort_order: sortOrder, workflow_version_id: 'wfv-exam-1' } as WorkflowStepDef & { workflow_version_id?: string });
+      writeCustomSteps(custom);
+      return;
+    }
+    const { error } = await supabase.from('workflow_steps').update({ sort_order: sortOrder }).eq('id', stepId);
+    if (error) throw error;
+  },
+
+  async reorderSteps(versionId, orderedStepIds) {
+    if (!orderedStepIds.length) return this.getSteps(versionId);
+
+    if (isDemoMode || !supabase) {
+      const existing = demoStepsForVersion(versionId);
+      const byId = new Map(existing.map(step => [step.id, step]));
+      const otherCustom = readCustomSteps().filter(step => {
+        const tagged = step as WorkflowStepDef & { workflow_version_id?: string };
+        return tagged.workflow_version_id !== versionId;
+      });
+      orderedStepIds.forEach((id, index) => {
+        const current = byId.get(id);
+        if (!current) return;
+        otherCustom.push({
+          ...current,
+          sort_order: (index + 1) * 10,
+          workflow_version_id: versionId,
+        } as WorkflowStepDef & { workflow_version_id?: string });
+      });
+      writeCustomSteps(otherCustom);
+      return this.getSteps(versionId);
+    }
+
+    for (let index = 0; index < orderedStepIds.length; index++) {
+      await this.updateStepOrder(orderedStepIds[index], (index + 1) * 10);
+    }
+    return this.getSteps(versionId);
+  },
+
   async startRun(input) {
     const runId = `wfr-${Date.now()}`;
     const versionId = (await this.getPublishedVersion(input.workflowId)) || 'wfv-exam-1';

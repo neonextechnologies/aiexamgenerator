@@ -1,4 +1,4 @@
-import { formatFromAddress, smtpUsesImplicitTls } from './smtp';
+import { formatFromAddress, smtpUsesImplicitTls } from './smtp.ts';
 
 function decodeStoredSecret(encoded?: string | null): string {
   if (!encoded) return '';

@@ -47,6 +47,8 @@ export default function GenerateWizardV2() {
   const [providerId, setProviderId] = useState('');
   const [ruleSetId, setRuleSetId] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [progressPct, setProgressPct] = useState(0);
+  const [progressStage, setProgressStage] = useState('');
   const [result, setResult] = useState<GenerationV2Result | null>(null);
   const [error, setError] = useState('');
 
@@ -65,6 +67,10 @@ export default function GenerateWizardV2() {
       setRuleSets(setRows);
       setProviderId(providerRows.find(provider => provider.is_enabled)?.id || providerRows[0]?.id || '');
       setRuleSetId(setRows[0]?.id || '');
+      if (typeRows[0]?.code) setQuestionType(typeRows[0].code as QuestionType);
+      if (difficultyRows[0]?.code) setDifficulty(difficultyRows[0].code as DifficultyLevel);
+    }).catch(cause => {
+      setError(cause instanceof Error ? cause.message : 'โหลดข้อมูลเริ่มต้นไม่สำเร็จ');
     }).finally(() => setLoading(false));
   }, []);
 
@@ -96,7 +102,7 @@ export default function GenerateWizardV2() {
     if (step === 0) return Boolean(courseId);
     if (step === 1) return !knowledgeBounded || docIds.length > 0;
     if (step === 2) return loIds.length > 0;
-    if (step === 4) return numberOfQuestions > 0 && numberOfQuestions <= 30;
+    if (step === 4) return numberOfQuestions > 0 && numberOfQuestions <= 30 && questionTypes.length > 0 && difficulties.length > 0;
     return true;
   };
 
@@ -104,6 +110,8 @@ export default function GenerateWizardV2() {
     setGenerating(true);
     setResult(null);
     setError('');
+    setProgressPct(0);
+    setProgressStage('QUEUED');
     try {
       const generationResult = await aiOrchestrator.runGeneration({
         mode,
@@ -123,8 +131,14 @@ export default function GenerateWizardV2() {
         providerId: providerId || null,
         ruleSetId: ruleSetId || null,
         createdBy: user?.id || 'unknown',
+      }, {
+        onProgress: (update) => {
+          setProgressPct(update.progressPct);
+          setProgressStage(update.stageMessage || update.currentStage);
+        },
       });
       setResult(generationResult);
+      setProgressPct(100);
       if (!generationResult.success) setError(generationResult.error || 'ระบบไม่สามารถสร้างข้อสอบตามแผนได้');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'เกิดข้อผิดพลาดในการสร้างข้อสอบ');
@@ -146,10 +160,90 @@ export default function GenerateWizardV2() {
         {step === 1 && <section><h2 className="font-semibold mb-1">2. เลือกแหล่งความรู้</h2><p className="text-sm text-neutral-500 mb-4">เอกสารที่ AI ต้องใช้อ้างอิงและสร้างหลักฐาน</p><div className="space-y-2">{docs.map(document => <button key={document.id} onClick={() => toggle(docIds, document.id, setDocIds)} className={`w-full flex items-center gap-3 p-3 rounded-lg border text-left ${docIds.includes(document.id) ? 'border-primary-500 bg-primary-50' : 'border-neutral-200'}`}><FileText className="w-5 h-5 text-neutral-400" /><span className="flex-1">{document.file_name}</span>{docIds.includes(document.id) && <Check className="w-5 h-5 text-primary-600" />}</button>)}</div>{!docs.length && <p className="text-sm text-warning-700">รายวิชานี้ยังไม่มีเอกสาร</p>}</section>}
         {step === 2 && <section><h2 className="font-semibold mb-1">3. เลือก Learning Outcomes</h2><p className="text-sm text-neutral-500 mb-4">ทุกคำถามจะถูกผูกกับผลลัพธ์การเรียนรู้ที่เลือก</p><div className="space-y-2">{outcomes.map(outcome => <button key={outcome.id} onClick={() => toggle(loIds, outcome.id, setLoIds)} className={`w-full flex items-center gap-3 p-3 rounded-lg border text-left ${loIds.includes(outcome.id) ? 'border-primary-500 bg-primary-50' : 'border-neutral-200'}`}><Target className="w-5 h-5 text-neutral-400" /><span className="flex-1"><strong>{outcome.code}</strong> {outcome.title}</span>{loIds.includes(outcome.id) && <Check className="w-5 h-5 text-primary-600" />}</button>)}</div></section>}
         {step === 3 && <section><h2 className="font-semibold mb-4">4. เลือกโหมดการสร้าง</h2><div className="grid md:grid-cols-3 gap-4">{MODES.map(item => <button key={item.id} onClick={() => setMode(item.id)} className={`text-left p-5 rounded-xl border ${mode === item.id ? 'border-primary-500 bg-primary-50' : 'border-neutral-200 hover:border-neutral-300'}`}><item.icon className="w-7 h-7 text-primary-600 mb-3" /><p className="font-semibold">{item.title}</p><p className="text-sm text-neutral-500 mt-1">{item.description}</p></button>)}</div>{mode === 'manual' && <div className="mt-5 p-4 rounded-lg bg-neutral-50 border border-neutral-200"><p className="text-sm mb-3">โหมด Manual ใช้ตัวสร้างคำถามโดยผู้สอนโดยเฉพาะ</p><button onClick={() => navigate(`/questions/new?courseId=${encodeURIComponent(courseId)}`)} className="btn-primary">ไปหน้าสร้างข้อสอบด้วยตนเอง</button></div>}</section>}
-        {step === 4 && <section className="space-y-4"><h2 className="font-semibold">5. ตั้งค่าการสร้าง</h2><div className="grid md:grid-cols-2 gap-4"><div><label className="label">ประเภทคำถาม</label><select className="input" value={questionType} onChange={event => setQuestionType(event.target.value as QuestionType)}>{questionTypes.filter(type => type.supports_ai_generation).map(type => <option key={type.id} value={type.code}>{type.name_th}</option>)}</select></div><div><label className="label">ระดับความยาก</label><select className="input" value={difficulty} onChange={event => setDifficulty(event.target.value as DifficultyLevel)}>{difficulties.map(item => <option key={item.id} value={item.code}>{item.name_th}</option>)}</select></div><div><label className="label">Bloom</label><select className="input" value={bloom} onChange={event => setBloom(event.target.value as BloomLevel)}>{Object.entries(BLOOM_LABELS).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></div><div><label className="label">ภาษา</label><select className="input" value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="th">ไทย</option><option value="en">English</option></select></div><div><label className="label">จำนวนข้อ</label><input className="input" type="number" min={1} max={30} value={numberOfQuestions} onChange={event => setNumberOfQuestions(Number(event.target.value))} /></div><div><label className="label">คะแนนต่อข้อ</label><input className="input" type="number" min={1} value={marks} onChange={event => setMarks(Number(event.target.value))} /></div><div><label className="label">AI Provider</label><select className="input" value={providerId} onChange={event => setProviderId(event.target.value)}>{providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name}{provider.is_enabled ? '' : ' (ยังไม่เปิดใช้)'}</option>)}</select></div><div><label className="label">Rule Set</label><select className="input" value={ruleSetId} onChange={event => setRuleSetId(event.target.value)}>{ruleSets.map(ruleSet => <option key={ruleSet.id} value={ruleSet.id}>{ruleSet.name}</option>)}</select></div></div><div className="space-y-2"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={knowledgeBounded} onChange={event => setKnowledgeBounded(event.target.checked)} /> จำกัดคำตอบด้วยหลักฐานจากเอกสาร (Knowledge Bounded)</label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeExplanation} onChange={event => setIncludeExplanation(event.target.checked)} /> รวมคำอธิบาย</label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeRubric} onChange={event => setIncludeRubric(event.target.checked)} /> รวม Rubric</label></div></section>}
+        {step === 4 && (
+          <section className="space-y-4">
+            <h2 className="font-semibold">5. ตั้งค่าการสร้าง</h2>
+            {(!questionTypes.length || !difficulties.length) && (
+              <div className="p-4 rounded-lg bg-error-50 border border-error-200 text-sm text-error-700 flex gap-2">
+                <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>
+                  {!questionTypes.length && !difficulties.length
+                    ? 'ไม่พบประเภทคำถามและระดับความยากจากระบบ'
+                    : !questionTypes.length
+                      ? 'ไม่พบประเภทคำถามจากระบบ'
+                      : 'ไม่พบระดับความยากจากระบบ'}
+                  {error ? ` — ${error}` : ''}
+                </span>
+              </div>
+            )}
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="label">ประเภทคำถาม</label>
+                <select className="input" value={questionType} onChange={event => setQuestionType(event.target.value as QuestionType)} disabled={!questionTypes.length}>
+                  {questionTypes.filter(type => type.supports_ai_generation).map(type => <option key={type.id} value={type.code}>{type.name_th}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">ระดับความยาก</label>
+                <select className="input" value={difficulty} onChange={event => setDifficulty(event.target.value as DifficultyLevel)} disabled={!difficulties.length}>
+                  {difficulties.map(item => <option key={item.id} value={item.code}>{item.name_th}</option>)}
+                </select>
+              </div>
+              <div><label className="label">Bloom</label><select className="input" value={bloom} onChange={event => setBloom(event.target.value as BloomLevel)}>{Object.entries(BLOOM_LABELS).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></div>
+              <div><label className="label">ภาษา</label><select className="input" value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="th">ไทย</option><option value="en">English</option></select></div>
+              <div><label className="label">จำนวนข้อ</label><input className="input" type="number" min={1} max={30} value={numberOfQuestions} onChange={event => setNumberOfQuestions(Number(event.target.value))} /></div>
+              <div><label className="label">คะแนนต่อข้อ</label><input className="input" type="number" min={1} value={marks} onChange={event => setMarks(Number(event.target.value))} /></div>
+              <div><label className="label">AI Provider</label><select className="input" value={providerId} onChange={event => setProviderId(event.target.value)}>{providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name}{provider.is_enabled ? '' : ' (ยังไม่เปิดใช้)'}</option>)}</select></div>
+              <div><label className="label">Rule Set</label><select className="input" value={ruleSetId} onChange={event => setRuleSetId(event.target.value)}>{ruleSets.map(ruleSet => <option key={ruleSet.id} value={ruleSet.id}>{ruleSet.name}</option>)}</select></div>
+            </div>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={knowledgeBounded} onChange={event => setKnowledgeBounded(event.target.checked)} /> จำกัดคำตอบด้วยหลักฐานจากเอกสาร (Knowledge Bounded)</label>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeExplanation} onChange={event => setIncludeExplanation(event.target.checked)} /> รวมคำอธิบาย</label>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeRubric} onChange={event => setIncludeRubric(event.target.checked)} /> รวม Rubric</label>
+            </div>
+          </section>
+        )}
         {step === 5 && <section><h2 className="font-semibold mb-1">6. กฎที่ใช้</h2><p className="text-sm text-neutral-500 mb-4">เรียงตามขอบเขตและลำดับความสำคัญ</p><div className="space-y-2">{rules.map(rule => <div key={rule.id} className="p-3 border border-neutral-200 rounded-lg flex flex-wrap items-center gap-2"><div className="flex-1 min-w-48"><p className="font-medium text-sm">{rule.name}</p><p className="text-xs text-neutral-500">{rule.code} · Priority {rule.priority}</p></div><Badge variant="neutral">{rule.scope}</Badge><Badge variant={rule.severity === 'critical' || rule.severity === 'error' ? 'error' : rule.severity === 'warning' ? 'warning' : 'primary'}>{rule.severity}</Badge>{rule.is_blocking && <Badge variant="error">Blocking</Badge>}</div>)}</div></section>}
         {step === 6 && <section><h2 className="font-semibold mb-4">7. ตรวจสอบแผน</h2><div className="divide-y divide-neutral-100 text-sm">{[['รายวิชา', courses.find(course => course.id === courseId)?.course_code || '-'], ['โหมด', mode], ['เอกสาร', `${docIds.length} ไฟล์`], ['Learning Outcomes', `${loIds.length} รายการ`], ['ประเภท', questionTypes.find(type => type.code === questionType)?.name_th || questionType], ['Bloom', BLOOM_LABELS[bloom]], ['ความยาก', difficulties.find(item => item.code === difficulty)?.name_th || difficulty], ['จำนวนและคะแนน', `${numberOfQuestions} ข้อ × ${marks} คะแนน`], ['Provider', providers.find(provider => provider.id === providerId)?.name || '-'], ['Rule Set', ruleSets.find(ruleSet => ruleSet.id === ruleSetId)?.name || '-'], ['Knowledge Bounded', knowledgeBounded ? 'เปิด' : 'ปิด']].map(([label, value]) => <div key={label} className="flex justify-between gap-4 py-3"><span className="text-neutral-500">{label}</span><span className="font-medium text-right">{value}</span></div>)}</div></section>}
-        {step === 7 && <section><h2 className="font-semibold mb-4">8. สร้างและตรวจสอบ</h2>{generating ? <div className="py-10 text-center"><Sparkles className="w-10 h-10 text-primary-500 mx-auto animate-pulse" /><p className="text-sm text-neutral-500 mt-4 mb-3">กำลังดำเนินการผ่าน Orchestrator...</p><ProgressBar value={70} /></div> : result?.success ? <div><div className="flex gap-2 items-center text-success-700 mb-4"><Check className="w-5 h-5" /><strong>สร้างสำเร็จ {result.savedQuestions?.length || result.questions.length} ข้อ</strong></div>{result.usage && <p className="text-xs text-neutral-500 mb-4">Model: {result.usage.model} · Tokens: {result.usage.totalTokens.toLocaleString()}</p>}<h3 className="font-medium mb-2">ผล Verification</h3><div className="space-y-2 max-h-80 overflow-y-auto">{(result.verification || []).map((verification, index) => <div key={index} className="border border-neutral-200 rounded-lg p-3"><div className="flex justify-between"><span className="text-sm font-medium">ข้อ {index + 1}</span><Badge variant={verification.status === 'pass' ? 'success' : verification.status === 'warning' ? 'warning' : 'error'}>{verification.status} · {verification.score}</Badge></div>{verification.violations.length > 0 && <p className="text-xs text-error-600 mt-2">{verification.violations.join(' · ')}</p>}{verification.recommendations.length > 0 && <p className="text-xs text-neutral-500 mt-1">{verification.recommendations.join(' · ')}</p>}</div>)}</div><div className="flex gap-2 mt-5"><button className="btn-primary" onClick={() => navigate('/question-bank')}>ไปคลังข้อสอบ</button><button className="btn-secondary" onClick={() => navigate('/review')}>ไปคิวตรวจ</button></div></div> : <div className="py-8 text-center"><Sparkles className="w-12 h-12 text-primary-300 mx-auto mb-4" /><p className="text-sm text-neutral-500 mb-4">พร้อมสร้าง {numberOfQuestions} ข้อในโหมด {mode}</p>{error && <div className="mb-4 text-sm text-error-700 flex justify-center gap-2"><AlertCircle className="w-4 h-4" />{error}</div>}<button onClick={generate} className="btn-primary">เริ่มสร้างข้อสอบ</button></div>}</section>}
+        {step === 7 && (
+          <section>
+            <h2 className="font-semibold mb-4">8. สร้างและตรวจสอบ</h2>
+            {generating ? (
+              <div className="py-10 text-center">
+                <Sparkles className="w-10 h-10 text-primary-500 mx-auto animate-pulse" />
+                <p className="text-sm text-neutral-500 mt-4 mb-1">กำลังสร้างบน background worker...</p>
+                <p className="text-xs text-neutral-400 mb-3">ปิดหน้าต่างได้ — งานยังรันต่อที่เซิร์ฟเวอร์ · {progressStage || 'เริ่มต้น'} · {progressPct}%</p>
+                <ProgressBar value={progressPct} />
+              </div>
+            ) : result?.success ? (
+              <div>
+                <div className="flex gap-2 items-center text-success-700 mb-4"><Check className="w-5 h-5" /><strong>สร้างสำเร็จ {result.savedQuestions?.length || result.questions.length} ข้อ</strong></div>
+                {result.usage && <p className="text-xs text-neutral-500 mb-4">Model: {result.usage.model} · Tokens: {result.usage.totalTokens.toLocaleString()}</p>}
+                <h3 className="font-medium mb-2">ผล Verification</h3>
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {(result.verification || []).map((verification, index) => (
+                    <div key={index} className="border border-neutral-200 rounded-lg p-3">
+                      <div className="flex justify-between"><span className="text-sm font-medium">ข้อ {index + 1}</span><Badge variant={verification.status === 'pass' ? 'success' : verification.status === 'warning' ? 'warning' : 'error'}>{verification.status} · {verification.score}</Badge></div>
+                      {verification.violations.length > 0 && <p className="text-xs text-error-600 mt-2">{verification.violations.join(' · ')}</p>}
+                      {verification.recommendations.length > 0 && <p className="text-xs text-neutral-500 mt-1">{verification.recommendations.join(' · ')}</p>}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2 mt-5">
+                  <button className="btn-primary" onClick={() => navigate('/question-bank')}>ไปคลังข้อสอบ</button>
+                  <button className="btn-secondary" onClick={() => navigate('/review')}>ไปคิวตรวจ</button>
+                </div>
+              </div>
+            ) : (
+              <div className="py-8 text-center">
+                <Sparkles className="w-12 h-12 text-primary-300 mx-auto mb-4" />
+                <p className="text-sm text-neutral-500 mb-4">พร้อมสร้าง {numberOfQuestions} ข้อในโหมด {mode}</p>
+                {error && <div className="mb-4 text-sm text-error-700 flex justify-center gap-2"><AlertCircle className="w-4 h-4" />{error}</div>}
+                <button onClick={generate} className="btn-primary">เริ่มสร้างข้อสอบ</button>
+              </div>
+            )}
+          </section>
+        )}
         {step < STEPS.length - 1 && <div className="flex justify-between mt-6 pt-4 border-t border-neutral-100"><button disabled={step === 0} onClick={() => setStep(current => Math.max(0, current - 1))} className="btn-secondary"><ChevronLeft className="w-4 h-4" /> ย้อนกลับ</button><button disabled={!canContinue()} onClick={() => setStep(current => current + 1)} className="btn-primary">ถัดไป <ChevronRight className="w-4 h-4" /></button></div>}
       </Card>
     </div>

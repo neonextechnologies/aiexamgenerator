@@ -243,6 +243,7 @@ export interface ChatContext {
   blueprintId?: string;
   workflowId?: string;
   ruleSetId?: string;
+  providerId?: string;
   page?: string;
 }
 

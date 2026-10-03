@@ -30,27 +30,14 @@ export interface SaveAIProviderInput {
   config_json?: Record<string, unknown>;
 }
 
-function encodeApiKey(key: string): string {
-  return btoa(key);
-}
-
-function decodeApiKey(encoded?: string | null): string {
-  if (!encoded) return '';
-  try {
-    return atob(encoded);
-  } catch {
-    return '';
-  }
-}
-
 function hintFromKey(key?: string | null): string | null {
   if (!key || key.length < 4) return null;
   return `••••${key.slice(-4)}`;
 }
 
 function rowToDetails(row: Record<string, unknown>): AIProviderDetails {
-  const encoded = row.encrypted_api_key as string | null | undefined;
-  const decoded = decodeApiKey(encoded);
+  const hint = (row.key_hint as string | null | undefined) || null;
+  const hasKey = Boolean(row.has_api_key) || Boolean(hint) || Boolean(row.encrypted_api_key);
   return {
     id: String(row.id),
     name: String(row.name),
@@ -71,8 +58,9 @@ function rowToDetails(row: Record<string, unknown>): AIProviderDetails {
     last_tested_at: (row.last_tested_at as string | null) ?? null,
     last_test_status: (row.last_test_status as string | null) ?? null,
     config_json: (row.config_json as Record<string, unknown>) || {},
-    has_api_key: Boolean(encoded),
-    api_key_hint: hintFromKey(decoded),
+    has_api_key: hasKey,
+    // Never decrypt client-side — only show server-provided hint.
+    api_key_hint: hint,
   };
 }
 
@@ -124,14 +112,17 @@ export const aiProviderService = {
 
     const { data, error } = await supabase
       .from('ai_providers')
-      .select('id,name,provider_type,is_enabled,base_url,default_model,analysis_model,generation_model,verification_model,embedding_model,temperature,max_tokens,timeout_ms,daily_limit,monthly_budget_usd,secret_ref,last_tested_at,last_test_status,config_json,encrypted_api_key')
+      .select('id,name,provider_type,is_enabled,base_url,default_model,analysis_model,generation_model,verification_model,embedding_model,temperature,max_tokens,timeout_ms,daily_limit,monthly_budget_usd,secret_ref,last_tested_at,last_test_status,config_json,key_hint,key_encryption')
       .order('name');
 
     if (error || !data?.length) {
       return PROVIDER_CATALOG.map(entry => catalogToDetails(entry));
     }
 
-    const byId = new Map(data.map(row => [String(row.id), rowToDetails(row as Record<string, unknown>)]));
+    const byId = new Map(data.map(row => [String(row.id), rowToDetails({
+      ...(row as Record<string, unknown>),
+      has_api_key: Boolean((row as { key_hint?: string }).key_hint),
+    })]));
     return PROVIDER_CATALOG.map(entry => byId.get(entry.id) || catalogToDetails(entry));
   },
 
@@ -162,10 +153,6 @@ export const aiProviderService = {
       updated_at: new Date().toISOString(),
     };
 
-    if (input.api_key?.trim()) {
-      payload.encrypted_api_key = encodeApiKey(input.api_key.trim());
-    }
-
     if (isDemoMode || !supabase) {
       const stored = readDemoStore();
       const current = stored[input.id] || catalogToDetails(catalog || PROVIDER_CATALOG[0]);
@@ -175,6 +162,10 @@ export const aiProviderService = {
         has_api_key: input.api_key?.trim() ? true : current.has_api_key,
         api_key_hint: input.api_key?.trim() ? hintFromKey(input.api_key.trim()) : current.api_key_hint,
       } as AIProviderDetails;
+      // Demo-only localStorage may keep a base64 key for local tests — never used in real mode.
+      if (input.api_key?.trim()) {
+        (next as AIProviderDetails & { _demo_key?: string })._demo_key = input.api_key.trim();
+      }
       stored[input.id] = next;
       writeDemoStore(stored);
       return next;
@@ -183,11 +174,34 @@ export const aiProviderService = {
     const { data, error } = await supabase
       .from('ai_providers')
       .upsert(payload, { onConflict: 'id' })
-      .select('id,name,provider_type,is_enabled,base_url,default_model,analysis_model,generation_model,verification_model,embedding_model,temperature,max_tokens,timeout_ms,daily_limit,monthly_budget_usd,secret_ref,last_tested_at,last_test_status,config_json,encrypted_api_key')
+      .select('id,name,provider_type,is_enabled,base_url,default_model,analysis_model,generation_model,verification_model,embedding_model,temperature,max_tokens,timeout_ms,daily_limit,monthly_budget_usd,secret_ref,last_tested_at,last_test_status,config_json,key_hint,key_encryption')
       .single();
 
     if (error) throw new Error(error.message);
-    return rowToDetails(data as Record<string, unknown>);
+
+    if (input.api_key?.trim()) {
+      const { ok, data: keyResult } = await invokeEdgeFunction<{
+        success?: boolean;
+        key_hint?: string;
+        key_encryption?: string;
+        error?: string;
+      }>('exam-engine', {
+        action: 'provider_save_key',
+        providerId: input.id,
+        apiKey: input.api_key.trim(),
+      });
+      if (!ok || !keyResult.success) {
+        throw new Error(keyResult.error || 'เข้ารหัส API key ไม่สำเร็จ — ตรวจ PROVIDER_SECRETS_KEY');
+      }
+      return rowToDetails({
+        ...(data as Record<string, unknown>),
+        key_hint: keyResult.key_hint,
+        key_encryption: keyResult.key_encryption,
+        has_api_key: true,
+      });
+    }
+
+    return rowToDetails({ ...(data as Record<string, unknown>), has_api_key: Boolean((data as { key_hint?: string }).key_hint) });
   },
 
   async setDefaultProvider(id: string): Promise<void> {

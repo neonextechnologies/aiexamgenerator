@@ -1,5 +1,5 @@
-import type { GenerationV2Request, GenerationV2Result, AIProviderConfig, QuestionTypeDef, DifficultyDefinition } from '../../types/v2';
-import type { AIOrchestrator } from '../types';
+import type { GenerationV2Request, GenerationV2Result, AIProviderConfig, QuestionTypeDef, DifficultyDefinition, GenerationMode } from '../../types/v2';
+import type { AIOrchestrator, GenerationProgressUpdate } from '../types';
 import { isDemoMode, supabase } from '../../lib/supabase';
 import { invokeEdgeFunction } from '../../lib/edge';
 import { knowledgeProvider } from '../knowledge';
@@ -8,8 +8,8 @@ import { verificationEngine } from '../verification';
 import { analysisEngine } from '../workflows/analysis';
 import { workflowEngine } from '../workflows';
 import { DemoAIProvider } from '../../lib/ai-provider';
-import { insertQuestions, createGenerationJob, createUsageLog, createNotification, listQuestions } from '../../lib/api';
-import type { Question } from '../../types';
+import { insertQuestions, createGenerationJob, updateGenerationJob, getGenerationJob, createUsageLog, createNotification, listQuestions } from '../../lib/api';
+import type { GenerationJob, Question } from '../../types';
 import { contentHashForQuestion } from '../duplicates';
 import { ensureRubricForQuestion, normalizeRubric } from '../rubric';
 import { aiProviderService } from '../ai-providers';
@@ -38,19 +38,108 @@ const DEMO_DIFFS: DifficultyDefinition[] = [
   { id: 'diff-hard', code: 'hard', name_th: 'ยาก', name_en: 'Hard', description: 'Analysis/synthesis', sort_order: 3, is_active: true },
 ];
 
-async function runLocalPipeline(request: GenerationV2Request): Promise<GenerationV2Result> {
+const STAGE_PROGRESS: Record<string, { pct: number; message: string }> = {
+  QUEUED: { pct: 0, message: 'รอคิวเริ่มต้น' },
+  RETRIEVE: { pct: 10, message: 'กำลังดึงหลักฐานจากเอกสาร' },
+  ANALYZE: { pct: 30, message: 'กำลังวิเคราะห์ความครอบคลุม' },
+  GENERATE: { pct: 60, message: 'กำลังสร้างข้อสอบ' },
+  VERIFY: { pct: 85, message: 'กำลังตรวจสอบคุณภาพ' },
+  DONE: { pct: 100, message: 'เสร็จสิ้น' },
+};
+
+type PipelineOptions = { onProgress?: (update: GenerationProgressUpdate) => void };
+
+async function setJobStage(
+  jobId: string,
+  stage: string,
+  extras: Partial<GenerationJob> = {},
+  onProgress?: (update: GenerationProgressUpdate) => void,
+) {
+  const meta = STAGE_PROGRESS[stage] || { pct: extras.progress_pct ?? 0, message: extras.stage_message || stage };
+  const patch: Partial<GenerationJob> = {
+    status: (extras.status as GenerationJob['status']) || 'running',
+    progress_pct: extras.progress_pct ?? meta.pct,
+    current_stage: stage,
+    stage_message: extras.stage_message || meta.message,
+    ...extras,
+  };
+  try {
+    await updateGenerationJob(jobId, patch);
+  } catch {
+    // Job progress must not abort the pipeline.
+  }
+  onProgress?.({
+    progressPct: patch.progress_pct ?? meta.pct,
+    currentStage: stage,
+    stageMessage: patch.stage_message || meta.message,
+    jobId,
+    status: patch.status,
+  });
+}
+
+async function runLocalPipeline(
+  request: GenerationV2Request,
+  options: PipelineOptions = {},
+): Promise<GenerationV2Result> {
   const executionId = `exec-${Date.now()}`;
+  const jobId = `job-${Date.now()}`;
   const knowledgeBounded = request.knowledgeBounded !== false;
   const ruleSetId = request.ruleSetId || 'rs-system-default';
   const workflowId = request.workflowId || 'wf-exam-default';
+  const now = new Date().toISOString();
+  const onProgress = options.onProgress;
+
+  await createGenerationJob({
+    id: jobId,
+    course_id: request.courseId,
+    blueprint_id: request.blueprintId || null,
+    document_ids: request.documentIds,
+    learning_outcome_ids: request.learningOutcomeIds,
+    question_type: request.questionType as Question['question_type'],
+    bloom_level: request.bloomLevel as Question['intended_bloom_level'],
+    difficulty: request.difficulty as Question['intended_difficulty'],
+    number_of_questions: request.numberOfQuestions,
+    language: request.language,
+    marks_per_question: request.marksPerQuestion,
+    include_explanation: request.includeExplanation,
+    include_rubric: request.includeRubric,
+    status: 'queued',
+    generated_count: 0,
+    failed_count: 0,
+    total_questions: request.numberOfQuestions,
+    created_by: request.createdBy,
+    created_at: now,
+    progress_pct: 0,
+    current_stage: 'QUEUED',
+    stage_message: STAGE_PROGRESS.QUEUED.message,
+    request_json: request as unknown as Record<string, unknown>,
+    mode: request.mode,
+    provider_id: request.providerId || null,
+    knowledge_bounded: knowledgeBounded,
+    rule_set_id: ruleSetId,
+  });
+  onProgress?.({
+    progressPct: 0,
+    currentStage: 'QUEUED',
+    stageMessage: STAGE_PROGRESS.QUEUED.message,
+    jobId,
+    status: 'queued',
+  });
 
   const { runId } = await workflowEngine.startRun({
     workflowId, mode: request.mode, courseId: request.courseId, createdBy: request.createdBy, request,
   });
 
+  await updateGenerationJob(jobId, {
+    status: 'running',
+    started_at: new Date().toISOString(),
+    workflow_run_id: runId,
+  }).catch(() => undefined);
+
   await workflowEngine.recordStep(runId, 'DEFINE', 'completed', { request });
   await workflowEngine.recordStep(runId, 'KNOWLEDGE_PREPARE', 'completed');
 
+  await setJobStage(jobId, 'RETRIEVE', {}, onProgress);
   const query = `${request.questionType} ${request.bloomLevel} ${request.difficulty} ${(request.learningOutcomeCodes || []).join(' ')}`;
   const evidencePack = await knowledgeProvider.retrieveWithCitations(query, {
     courseId: request.courseId,
@@ -60,12 +149,13 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
   evidencePack.learningOutcomes = request.learningOutcomeCodes || [];
   await workflowEngine.recordStep(runId, 'RETRIEVE', 'completed', { chunkCount: evidencePack.retrievedChunks.length });
 
+  await setJobStage(jobId, 'ANALYZE', {}, onProgress);
   const analysis = await analysisEngine.analyze(request, evidencePack);
   await workflowEngine.recordStep(runId, 'ANALYZE', 'completed', analysis);
 
   if (analysis.insufficientEvidence || analysis.decision === 'reject') {
     await workflowEngine.completeRun(runId, 'failed', analysis);
-    return {
+    const failResult: GenerationV2Result = {
       success: false,
       status: 'INSUFFICIENT_EVIDENCE',
       mode: request.mode,
@@ -77,13 +167,23 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       insufficientEvidence: true,
       error: analysis.reason.join('; '),
     };
+    await setJobStage(jobId, 'DONE', {
+      status: 'failed',
+      progress_pct: 100,
+      stage_message: failResult.error || 'หลักฐานไม่เพียงพอ',
+      error_message: failResult.error || null,
+      result_json: failResult as unknown as Record<string, unknown>,
+      completed_at: new Date().toISOString(),
+      failed_count: request.numberOfQuestions,
+    }, onProgress);
+    return failResult;
   }
 
   const rules = await ruleEngine.getRulesForSet(ruleSetId);
   const preRules = await ruleEngine.evaluate({ rules, mode: request.mode, knowledgeBounded, evidencePack });
   if (!preRules.passed) {
     await workflowEngine.completeRun(runId, 'failed', preRules);
-    return {
+    const failResult: GenerationV2Result = {
       success: false,
       status: 'RULE_BLOCKED',
       mode: request.mode,
@@ -95,7 +195,19 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       ruleEvaluation: preRules,
       error: preRules.violations.map(v => v.message).join('; '),
     };
+    await setJobStage(jobId, 'DONE', {
+      status: 'failed',
+      progress_pct: 100,
+      stage_message: failResult.error || 'กฎควบคุมไม่อนุญาต',
+      error_message: failResult.error || null,
+      result_json: failResult as unknown as Record<string, unknown>,
+      completed_at: new Date().toISOString(),
+      failed_count: request.numberOfQuestions,
+    }, onProgress);
+    return failResult;
   }
+
+  await setJobStage(jobId, 'GENERATE', {}, onProgress);
 
   // Generate via edge (preferred) or DemoAI
   let generated: Array<Record<string, unknown>> = [];
@@ -134,7 +246,7 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
 
   if (providerError) {
     await workflowEngine.completeRun(runId, 'failed', { error: providerError });
-    return {
+    const failResult: GenerationV2Result = {
       success: false,
       status: 'failed',
       mode: request.mode,
@@ -145,6 +257,17 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       questions: [],
       error: providerError,
     };
+    await setJobStage(jobId, 'DONE', {
+      status: 'failed',
+      progress_pct: 100,
+      stage_message: providerError,
+      error_message: providerError,
+      result_json: failResult as unknown as Record<string, unknown>,
+      completed_at: new Date().toISOString(),
+      failed_count: request.numberOfQuestions,
+      model: usage.model,
+    }, onProgress);
+    return failResult;
   }
 
   if (!generated.length) {
@@ -177,21 +300,50 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
 
   await workflowEngine.recordStep(runId, 'GENERATE', 'completed', { count: generated.length, provider: usedProvider });
 
-  // Map to question rows
+  await setJobStage(jobId, 'VERIFY', { model: usage.model }, onProgress);
+
+  // Map to question rows (rubric retry via edge before any static template)
   const citation = evidencePack.citations[0];
-  let questionRows: Partial<Question>[] = generated.map((gq) => {
+  const questionRows: Partial<Question>[] = [];
+  for (const gq of generated) {
     const text = String(gq.questionText || gq.question_text || '');
     const choices = (gq.choices as Question['choices']) || null;
     const qType = (gq.questionType || gq.question_type || request.questionType) as Question['question_type'];
     const marks = Number(gq.marks || request.marksPerQuestion);
-    const normalized = normalizeRubric(gq.rubric, marks);
-    const rubric = ensureRubricForQuestion({
-      questionType: qType,
-      marks,
-      includeRubric: request.includeRubric || qType === 'essay' || qType === 'case_study',
-      rubric: normalized || (gq.rubric as Question['rubric']) || null,
-    });
-    return {
+    let normalized = normalizeRubric(gq.rubric, marks);
+    const needsRubric = (request.includeRubric || qType === 'essay' || qType === 'case_study') && !normalized;
+    if (needsRubric && !isDemoMode) {
+      try {
+        const { ok, data } = await invokeEdgeFunction<{ success?: boolean; rubric?: unknown }>('exam-engine', {
+          action: 'rubric_retry',
+          questionText: text,
+          questionType: qType,
+          marks,
+          language: request.language,
+          courseId: request.courseId,
+          providerId: request.providerId,
+        });
+        if (ok && data.success && data.rubric) {
+          normalized = normalizeRubric(data.rubric, marks);
+        }
+      } catch {
+        // leave null — avoid silent static rubric in real mode when model retry fails
+      }
+    }
+    const rubric = normalized
+      || (isDemoMode
+        ? ensureRubricForQuestion({
+          questionType: qType,
+          marks,
+          includeRubric: request.includeRubric || qType === 'essay' || qType === 'case_study',
+          rubric: null,
+        })
+        : null);
+
+    const predictedBloom = (gq.predictedBloomLevel || gq.aiPredictedBloomLevel || gq.bloomLevel || request.bloomLevel) as Question['intended_bloom_level'];
+    const predictedDiff = (gq.predictedDifficulty || gq.aiPredictedDifficulty || gq.difficulty || request.difficulty) as Question['intended_difficulty'];
+
+    questionRows.push({
       course_id: request.courseId,
       question_type: qType,
       question_text: text,
@@ -202,9 +354,9 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       correct_answer: (gq.correctAnswer || gq.correct_answer || '') as string,
       explanation: String(gq.explanation || ''),
       intended_bloom_level: (gq.bloomLevel || gq.intended_bloom_level || request.bloomLevel) as Question['intended_bloom_level'],
-      ai_predicted_bloom_level: (gq.bloomLevel || request.bloomLevel) as Question['intended_bloom_level'],
+      ai_predicted_bloom_level: predictedBloom,
       intended_difficulty: (gq.difficulty || request.difficulty) as Question['intended_difficulty'],
-      ai_predicted_difficulty: (gq.difficulty || request.difficulty) as Question['intended_difficulty'],
+      ai_predicted_difficulty: predictedDiff,
       marks,
       estimated_answer_time_minutes: Number(gq.estimatedAnswerTimeMinutes || 2),
       source_references: citation
@@ -219,14 +371,15 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       generated_by_ai: true,
       ai_model: usage.model,
       content_hash: contentHashForQuestion(text),
-    };
-  });
+    });
+  }
 
+  let mutableQuestionRows = questionRows;
   const bankQuestions = await listQuestions({ courseId: request.courseId });
   const bankHashes = bankQuestions.map(q => q.content_hash || contentHashForQuestion(q.question_text));
 
   // Verify + optional one correction pass (demo: drop failing duplicates)
-  let verifications = await verificationEngine.verifyBatch(questionRows, {
+  let verifications = await verificationEngine.verifyBatch(mutableQuestionRows, {
     evidencePack,
     knowledgeBounded,
     bankQuestions,
@@ -237,8 +390,8 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
     const failedIdx = verifications.map((v, i) => (v.status === 'fail' ? i : -1)).filter(i => i >= 0);
     if (!failedIdx.length) break;
     // remove hard failures that are duplicates / missing text
-    questionRows = questionRows.filter((_, i) => verifications[i].status !== 'fail' || !verifications[i].violations.includes('duplicate'));
-    verifications = await verificationEngine.verifyBatch(questionRows, {
+    mutableQuestionRows = mutableQuestionRows.filter((_, i) => verifications[i].status !== 'fail' || !verifications[i].violations.includes('duplicate'));
+    verifications = await verificationEngine.verifyBatch(mutableQuestionRows, {
       evidencePack,
       knowledgeBounded,
       bankQuestions,
@@ -250,7 +403,7 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
 
   // Persist
   if (!savedQuestions.length) {
-    const toSave: Partial<Question>[] = questionRows.map((q, i) => {
+    const toSave: Partial<Question>[] = mutableQuestionRows.map((q, i) => {
       const dup = verifications[i]?.duplicateMatches?.[0];
       const flags = [...(q.quality_flags || [])];
       if (verifications[i]?.violations.includes('duplicate')) flags.push('duplicate');
@@ -281,32 +434,42 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
     rules, mode: request.mode, knowledgeBounded, questions: savedQuestions, evidencePack,
   });
 
-  const now = new Date().toISOString();
-  await createGenerationJob({
-    id: `job-${Date.now()}`,
-    course_id: request.courseId,
-    document_ids: request.documentIds,
-    learning_outcome_ids: request.learningOutcomeIds,
-    question_type: request.questionType as Question['question_type'],
-    bloom_level: request.bloomLevel as Question['intended_bloom_level'],
-    difficulty: request.difficulty as Question['intended_difficulty'],
-    number_of_questions: request.numberOfQuestions,
-    language: request.language,
-    marks_per_question: request.marksPerQuestion,
-    include_explanation: request.includeExplanation,
-    include_rubric: request.includeRubric,
+  const completedAt = new Date().toISOString();
+  const successResult: GenerationV2Result = {
+    success: true,
     status: 'completed',
+    mode: request.mode,
+    executionId,
+    workflowRunId: runId,
+    evidencePack,
+    analysis,
+    questions: generated,
+    savedQuestions,
+    verification: verifications,
+    ruleEvaluation: postRules,
+    usage,
+  };
+
+  await setJobStage(jobId, 'DONE', {
+    status: 'completed',
+    progress_pct: 100,
+    stage_message: STAGE_PROGRESS.DONE.message,
     generated_count: savedQuestions.length,
     failed_count: Math.max(0, request.numberOfQuestions - savedQuestions.length),
-    total_questions: request.numberOfQuestions,
     input_tokens: usage.inputTokens,
     output_tokens: usage.outputTokens,
     estimated_cost_usd: usage.estimatedCostUsd,
     model: usage.model,
-    created_by: request.createdBy,
-    created_at: now,
-    completed_at: now,
-  });
+    completed_at: completedAt,
+    result_json: {
+      savedCount: savedQuestions.length,
+      executionId,
+      workflowRunId: runId,
+      usage,
+    },
+    workflow_run_id: runId,
+    provider_id: usedProvider,
+  }, onProgress);
 
   if (!usageLogged) {
     await createUsageLog({
@@ -321,7 +484,7 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       estimated_cost_usd: usage.estimatedCostUsd,
       latency_ms: usage.latencyMs || 0,
       status: 'success',
-      created_at: now,
+      created_at: completedAt,
     });
   }
 
@@ -333,7 +496,7 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
     message: `โหมด ${request.mode}: สร้าง ${savedQuestions.length} ข้อ ผ่าน verification แล้วส่งคิวตรวจ`,
     link: '/review',
     read: false,
-    created_at: now,
+    created_at: completedAt,
   });
 
   if (!isDemoMode && supabase) {
@@ -355,55 +518,177 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       token_usage: usage,
       estimated_cost_usd: usage.estimatedCostUsd,
       status: 'completed',
-      completed_at: now,
+      completed_at: completedAt,
     });
   }
 
   await workflowEngine.recordStep(runId, 'HUMAN_REVIEW', 'pending', { questionCount: savedQuestions.length });
   await workflowEngine.completeRun(runId, 'awaiting_review', { savedCount: savedQuestions.length });
 
-  return {
-    success: true,
-    status: 'completed',
+  return successResult;
+}
+
+async function enqueueGenerationJob(request: GenerationV2Request): Promise<string> {
+  const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const knowledgeBounded = request.knowledgeBounded !== false;
+  const now = new Date().toISOString();
+  await createGenerationJob({
+    id: jobId,
+    course_id: request.courseId,
+    blueprint_id: request.blueprintId || null,
+    document_ids: request.documentIds,
+    learning_outcome_ids: request.learningOutcomeIds,
+    question_type: request.questionType as Question['question_type'],
+    bloom_level: request.bloomLevel as Question['intended_bloom_level'],
+    difficulty: request.difficulty as Question['intended_difficulty'],
+    number_of_questions: request.numberOfQuestions,
+    language: request.language,
+    marks_per_question: request.marksPerQuestion,
+    include_explanation: request.includeExplanation,
+    include_rubric: request.includeRubric,
+    status: 'queued',
+    generated_count: 0,
+    failed_count: 0,
+    total_questions: request.numberOfQuestions,
+    created_by: request.createdBy,
+    created_at: now,
+    progress_pct: 0,
+    current_stage: 'QUEUED',
+    stage_message: STAGE_PROGRESS.QUEUED.message,
+    request_json: request as unknown as Record<string, unknown>,
     mode: request.mode,
-    executionId,
-    workflowRunId: runId,
-    evidencePack,
-    analysis,
-    questions: generated,
-    savedQuestions,
-    verification: verifications,
-    ruleEvaluation: postRules,
-    usage,
+    provider_id: request.providerId || null,
+    knowledge_bounded: knowledgeBounded,
+    rule_set_id: request.ruleSetId || 'rs-system-default',
+    attempt_count: 0,
+    max_attempts: 3,
+  });
+  return jobId;
+}
+
+async function wakeGenerationWorker(jobId: string): Promise<void> {
+  // Fire-and-forget: edge returns 202 and continues via EdgeRuntime.waitUntil.
+  // Closing the browser after this request is accepted must not stop the worker.
+  try {
+    await invokeEdgeFunction('process-generation-job', { action: 'wake', jobId });
+  } catch {
+    // pg_cron / manual claim_and_process remains the safety net.
+  }
+}
+
+async function waitForGenerationJob(
+  jobId: string,
+  options: {
+    onProgress?: (update: GenerationProgressUpdate) => void;
+    pollMs?: number;
+    timeoutMs?: number;
+  } = {},
+): Promise<GenerationV2Result> {
+  const pollMs = options.pollMs ?? 1500;
+  const timeoutMs = options.timeoutMs ?? 15 * 60_000;
+  const started = Date.now();
+  let lastStage = '';
+
+  while (Date.now() - started < timeoutMs) {
+    const job = await getGenerationJob(jobId);
+    if (!job) {
+      return {
+        success: false,
+        status: 'failed',
+        mode: 'ai',
+        executionId: `exec-missing-${jobId}`,
+        questions: [],
+        error: `ไม่พบงาน ${jobId}`,
+      };
+    }
+
+    const stage = job.current_stage || job.status;
+    if (stage !== lastStage || job.progress_pct != null) {
+      lastStage = stage;
+      options.onProgress?.({
+        progressPct: job.progress_pct ?? 0,
+        currentStage: job.current_stage || job.status,
+        stageMessage: job.stage_message || undefined,
+        jobId,
+        status: job.status,
+      });
+    }
+
+    if (job.status === 'completed') {
+      const result = (job.result_json || {}) as unknown as GenerationV2Result;
+      return {
+        success: true,
+        status: 'completed',
+        mode: (result.mode as GenerationMode) || (job.mode as GenerationMode) || 'ai',
+        executionId: result.executionId || `exec-${jobId}`,
+        workflowRunId: result.workflowRunId,
+        evidencePack: result.evidencePack,
+        analysis: result.analysis,
+        questions: result.questions || [],
+        savedQuestions: result.savedQuestions || [],
+        verification: result.verification,
+        ruleEvaluation: result.ruleEvaluation,
+        usage: result.usage,
+      };
+    }
+
+    if (job.status === 'failed') {
+      const result = (job.result_json || {}) as unknown as GenerationV2Result;
+      return {
+        success: false,
+        status: result.insufficientEvidence ? 'INSUFFICIENT_EVIDENCE' : 'failed',
+        mode: (job.mode as GenerationMode) || 'ai',
+        executionId: result.executionId || `exec-${jobId}`,
+        questions: [],
+        savedQuestions: [],
+        insufficientEvidence: result.insufficientEvidence,
+        error: job.error_message || job.last_error || result.error || 'งานสร้างข้อสอบล้มเหลว',
+        evidencePack: result.evidencePack,
+        analysis: result.analysis,
+      };
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollMs));
+  }
+
+  return {
+    success: false,
+    status: 'failed',
+    mode: 'ai',
+    executionId: `exec-timeout-${jobId}`,
+    questions: [],
+    error: 'หมดเวลารอผลจาก background worker — งานอาจยังรันอยู่ที่หน้าประวัติงานสร้างข้อสอบ',
   };
 }
 
 export const aiOrchestrator: AIOrchestrator = {
-  async runGeneration(request) {
-    // Prefer server orchestration when available
-    if (!isDemoMode) {
-      try {
-        const { ok, data } = await invokeEdgeFunction<GenerationV2Result>('exam-engine', {
-          action: 'orchestrate',
-          request,
-        });
-        if (ok && data.success) return data;
-        if (data?.insufficientEvidence) return data;
-        if (data && !data.demoMode && data.error) {
-          return {
-            success: false,
-            status: 'failed',
-            mode: request.mode,
-            executionId: data.executionId || `exec-failed-${Date.now()}`,
-            questions: [],
-            error: data.error,
-          };
-        }
-      } catch {
-        // local pipeline fallback
-      }
+  async enqueueGeneration(request) {
+    const jobId = await enqueueGenerationJob(request);
+    if (!isDemoMode) await wakeGenerationWorker(jobId);
+    return { jobId };
+  },
+
+  async waitForJob(jobId, options) {
+    return waitForGenerationJob(jobId, options);
+  },
+
+  async runGeneration(request, options) {
+    // Demo mode has no edge worker — keep in-process pipeline.
+    if (isDemoMode || !supabase) {
+      return runLocalPipeline(request, options);
     }
-    return runLocalPipeline(request);
+
+    // Real mode: enqueue only; detached worker runs retrieve→analyze→generate→verify.
+    const jobId = await enqueueGenerationJob(request);
+    options?.onProgress?.({
+      progressPct: 0,
+      currentStage: 'QUEUED',
+      stageMessage: 'ใส่คิวแล้ว — worker กำลังทำงานแม้ปิดเบราว์เซอร์',
+      jobId,
+      status: 'queued',
+    });
+    await wakeGenerationWorker(jobId);
+    return waitForGenerationJob(jobId, options);
   },
 
   async listProviders() {
@@ -414,15 +699,15 @@ export const aiOrchestrator: AIOrchestrator = {
   async listQuestionTypes() {
     if (isDemoMode || !supabase) return DEMO_QTYPES;
     const { data, error } = await supabase.from('question_types').select('*').eq('is_active', true).order('sort_order');
-    if (error) return DEMO_QTYPES;
-    return (data || DEMO_QTYPES) as QuestionTypeDef[];
+    if (error) throw error;
+    return (data || []) as QuestionTypeDef[];
   },
 
   async listDifficulties() {
     if (isDemoMode || !supabase) return DEMO_DIFFS;
     const { data, error } = await supabase.from('difficulty_definitions').select('*').eq('is_active', true).order('sort_order');
-    if (error) return DEMO_DIFFS;
-    return (data || DEMO_DIFFS) as DifficultyDefinition[];
+    if (error) throw error;
+    return (data || []) as DifficultyDefinition[];
   },
 
   async testProvider(providerId, apiKey) {

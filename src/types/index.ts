@@ -46,7 +46,50 @@ export interface QuestionEditHistory {
 export interface ExamQuestion { question_id: string; order: number; marks: number; }
 export interface ExamVersion { version_label: string; questions: ExamQuestion[]; shuffle_questions: boolean; shuffle_choices: boolean; }
 export interface Exam { id: string; course_id: string; name: string; exam_type: ExamType; academic_year: string; semester: string; exam_date?: string | null; duration_minutes: number; total_marks: number; instructions?: string | null; questions: ExamQuestion[]; versions: ExamVersion[]; status: string; created_at: string; }
-export interface GenerationJob { id: string; course_id: string; blueprint_id?: string | null; document_ids: string[]; learning_outcome_ids: string[]; question_type: QuestionType; bloom_level: BloomLevel; difficulty: DifficultyLevel; number_of_questions: number; language: Language; marks_per_question: number; include_explanation: boolean; include_rubric: boolean; status: GenerationJobStatus; generated_count: number; failed_count: number; total_questions: number; input_tokens?: number | null; output_tokens?: number | null; estimated_cost_usd?: number | null; model?: string | null; created_by: string; created_at: string; completed_at?: string | null; }
+export interface GenerationJob {
+  id: string;
+  course_id: string;
+  blueprint_id?: string | null;
+  document_ids: string[];
+  learning_outcome_ids: string[];
+  question_type: QuestionType;
+  bloom_level: BloomLevel;
+  difficulty: DifficultyLevel;
+  number_of_questions: number;
+  language: Language;
+  marks_per_question: number;
+  include_explanation: boolean;
+  include_rubric: boolean;
+  status: GenerationJobStatus;
+  generated_count: number;
+  failed_count: number;
+  total_questions: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  estimated_cost_usd?: number | null;
+  model?: string | null;
+  created_by: string;
+  created_at: string;
+  completed_at?: string | null;
+  progress_pct?: number | null;
+  current_stage?: string | null;
+  stage_message?: string | null;
+  request_json?: Record<string, unknown> | null;
+  result_json?: Record<string, unknown> | null;
+  error_message?: string | null;
+  started_at?: string | null;
+  mode?: string | null;
+  provider_id?: string | null;
+  knowledge_bounded?: boolean | null;
+  rule_set_id?: string | null;
+  workflow_run_id?: string | null;
+  attempt_count?: number | null;
+  max_attempts?: number | null;
+  locked_at?: string | null;
+  locked_by?: string | null;
+  last_error?: string | null;
+  worker_heartbeat_at?: string | null;
+}
 export interface QuestionReview { id: string; question_id: string; reviewer_id: string; reviewer_name: string; decision: 'approved'|'rejected'|'revision_requested'; comment: string; confirmed_bloom?: BloomLevel | null; confirmed_difficulty?: DifficultyLevel | null; created_at: string; }
 export interface Notification { id: string; user_id: string; type: string; title: string; message: string; link?: string | null; read: boolean; created_at: string; }
 export interface AIUsageLog { id: string; user_id: string; course_id: string; provider: string; model: string; request_type: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number; latency_ms: number; status: string; created_at: string; }

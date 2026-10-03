@@ -26,3 +26,4 @@ dist-ssr
 supabase/.temp/
 supabase/.branches/
 
+deploy/.env

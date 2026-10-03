@@ -2,6 +2,8 @@ import type { EvidencePack, VerificationResult, VerificationCheck } from '../../
 import type { Question } from '../../types';
 import type { VerificationEngine } from '../types';
 import { contentHashForQuestion, findDuplicateMatches, type DuplicateCandidate } from '../duplicates';
+import { isDemoMode } from '../../lib/supabase';
+import { invokeEdgeFunction } from '../../lib/edge';
 
 function scoreFromChecks(checks: VerificationCheck[]): { status: VerificationResult['status']; score: number } {
   if (checks.some(c => c.status === 'fail')) return { status: 'fail', score: Math.max(0, 40 - checks.filter(c => c.status === 'fail').length * 10) };
@@ -132,6 +134,8 @@ export function verifyQuestionDeterministic(
     traceability: (question.source_references?.length || 0) > 0 ? 90 : 40,
   };
 
+  recommendations.push('[Heuristic] คะแนนจากกฎเชิงกำหนด — ใช้เมื่อโมเดล verify ไม่พร้อม');
+
   return {
     status,
     score,
@@ -148,20 +152,66 @@ export function verifyQuestionDeterministic(
   } as VerificationResult;
 }
 
+async function verifyWithModel(
+  question: Partial<Question>,
+  ctx: {
+    evidencePack?: EvidencePack | null;
+    knowledgeBounded: boolean;
+    existingHashes?: string[];
+    bankQuestions?: DuplicateCandidate[];
+    excludeId?: string;
+    nearThreshold?: number;
+  },
+): Promise<VerificationResult> {
+  const deterministic = verifyQuestionDeterministic(question, ctx);
+  if (isDemoMode) return deterministic;
+  try {
+    const { ok, data } = await invokeEdgeFunction<VerificationResult & { modelBased?: boolean; heuristicFallback?: boolean }>(
+      'exam-engine',
+      {
+        action: 'verify',
+        question,
+        evidencePack: ctx.evidencePack,
+        knowledgeBounded: ctx.knowledgeBounded,
+        courseId: question.course_id,
+      },
+    );
+    if (ok && data.status && data.modelBased) {
+      // Keep deterministic duplicate checks authoritative.
+      const mergedChecks = [
+        ...(data.checks || []),
+        ...deterministic.checks.filter(c => c.code === 'DUPLICATE' || c.code === 'NEAR_DUPLICATE' || c.code === 'HAS_CLO'),
+      ];
+      return {
+        ...deterministic,
+        ...data,
+        checks: mergedChecks,
+        duplicateMatches: deterministic.duplicateMatches,
+        violations: [...new Set([...(data.violations || []), ...deterministic.violations])],
+      } as VerificationResult;
+    }
+  } catch {
+    // keep heuristic
+  }
+  return deterministic;
+}
+
 export const verificationEngine: VerificationEngine = {
   async verifyQuestion(question, ctx) {
-    return verifyQuestionDeterministic(question, ctx);
+    return verifyWithModel(question, ctx);
   },
   async verifyBatch(questions, ctx) {
     const hashes: string[] = [];
     const batchAsBank: DuplicateCandidate[] = [];
     const bank = [...(ctx.bankQuestions || [])];
-    return questions.map(q => {
-      const result = verifyQuestionDeterministic(q, {
+    const results: VerificationResult[] = [];
+    for (const q of questions) {
+      const result = await verifyWithModel(q, {
         ...ctx,
         existingHashes: [...hashes, ...(ctx.existingHashes || [])],
         bankQuestions: [...bank, ...batchAsBank],
       });
+      results.push(result);
       const h = contentHashForQuestion(q.question_text || '');
       hashes.push(h);
       if (q.question_text) {
@@ -172,7 +222,7 @@ export const verificationEngine: VerificationEngine = {
           course_id: q.course_id,
         });
       }
-      return result;
-    });
+    }
+    return results;
   },
 };

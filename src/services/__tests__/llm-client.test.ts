@@ -280,6 +280,15 @@ describe('LLM provider client', () => {
     });
   });
 
+  it('estimates cost with custom per-1M rates from pricing table', () => {
+    const rates = { inputUsdPer1m: 1, outputUsdPer1m: 2 };
+    // 1M input @ $1 + 0.5M output @ $2 = $1 + $1 = $2
+    expect(estimateCostUsd(1_000_000, 500_000, rates)).toBeCloseTo(2, 8);
+    expect(estimateCostUsd(1000, 2000, rates)).toBeCloseTo(0.001 + 0.004, 8);
+    // Without rates, falls back to DEFAULT_* per-token constants
+    expect(estimateCostUsd(1000, 0)).toBeCloseTo(1000 * 0.0000025, 10);
+  });
+
   it('extracts JSON objects wrapped in prose', () => {
     expect(parseModelJson('คำตอบ\n[{"questionText":"ก"}]')).toEqual([{ questionText: 'ก' }]);
   });

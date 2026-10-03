@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, cursor/providers-email-ci-356b]
+    branches: [main, cursor/providers-email-ci-356b, cursor/export-editor-taxonomy-356b, cursor/real-mode-audit-fixes-356b]
   pull_request:
-    branches: [main, cursor/providers-email-ci-356b]
+    branches: [main, cursor/providers-email-ci-356b, cursor/export-editor-taxonomy-356b]
 
 jobs:
   verify:

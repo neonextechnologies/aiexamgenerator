@@ -11,6 +11,7 @@ import type {
   QuestionEditHistory,
   Exam,
   ExamQuestion,
+  ExamVersion,
   GenerationJob,
   QuestionReview,
   Notification,
@@ -112,6 +113,34 @@ export async function createCourseFromForm(input: {
     created_at: new Date().toISOString(),
   });
   return saved;
+}
+
+export async function updateCourse(
+  courseId: string,
+  patch: Partial<Pick<Course,
+    | 'course_name_th'
+    | 'course_name_en'
+    | 'description'
+    | 'credits'
+    | 'faculty'
+    | 'level'
+    | 'semester'
+    | 'academic_year'
+    | 'department'
+    | 'status'
+    | 'visibility'
+    | 'language'
+  >>,
+): Promise<Course> {
+  if (isDemoMode || !supabase) {
+    const idx = demoStore.courses.findIndex(c => c.id === courseId);
+    if (idx < 0) throw new Error('ไม่พบรายวิชา');
+    demoStore.courses[idx] = { ...demoStore.courses[idx], ...patch };
+    return demoStore.courses[idx];
+  }
+  const { data, error } = await requireClient().from('courses').update(patch).eq('id', courseId).select().single();
+  if (error) throw error;
+  return data as Course;
 }
 
 // ─── Learning outcomes ─────────────────────────────────────────────────────
@@ -623,6 +652,73 @@ export async function createExam(input: {
   return data as Exam;
 }
 
+export async function updateExam(
+  examId: string,
+  patch: Partial<Pick<Exam,
+    | 'name'
+    | 'instructions'
+    | 'exam_date'
+    | 'duration_minutes'
+    | 'status'
+    | 'versions'
+    | 'questions'
+    | 'total_marks'
+    | 'exam_type'
+    | 'academic_year'
+    | 'semester'
+  >>,
+): Promise<Exam> {
+  if (isDemoMode || !supabase) {
+    const idx = demoStore.exams.findIndex(e => e.id === examId);
+    if (idx < 0) throw new Error('ไม่พบชุดข้อสอบ');
+    demoStore.exams[idx] = { ...demoStore.exams[idx], ...patch };
+    return demoStore.exams[idx];
+  }
+  const { data, error } = await requireClient().from('exams').update(patch).eq('id', examId).select().single();
+  if (error) throw error;
+  return data as Exam;
+}
+
+function nextExamVersionLabel(versions: ExamVersion[]): string {
+  const used = new Set(versions.map(v => v.version_label));
+  for (let i = 0; i < 26; i++) {
+    const label = String.fromCharCode(65 + i);
+    if (!used.has(label)) return label;
+  }
+  return `V${versions.length + 1}`;
+}
+
+function cloneExamQuestions(questions: ExamQuestion[]): ExamQuestion[] {
+  return questions.map(q => ({ ...q }));
+}
+
+export async function createExamVersion(examId: string): Promise<Exam> {
+  const exam = await getExam(examId);
+  if (!exam) throw new Error('ไม่พบชุดข้อสอบ');
+  const source = exam.versions[exam.versions.length - 1]?.questions || exam.questions;
+  const version: ExamVersion = {
+    version_label: nextExamVersionLabel(exam.versions),
+    questions: cloneExamQuestions(source),
+    shuffle_questions: false,
+    shuffle_choices: false,
+  };
+  return updateExam(examId, { versions: [...exam.versions, version] });
+}
+
+export async function duplicateExamVersion(examId: string, versionIndex: number): Promise<Exam> {
+  const exam = await getExam(examId);
+  if (!exam) throw new Error('ไม่พบชุดข้อสอบ');
+  const source = exam.versions[versionIndex];
+  if (!source) throw new Error('ไม่พบเวอร์ชัน');
+  const version: ExamVersion = {
+    version_label: nextExamVersionLabel(exam.versions),
+    questions: cloneExamQuestions(source.questions),
+    shuffle_questions: source.shuffle_questions,
+    shuffle_choices: source.shuffle_choices,
+  };
+  return updateExam(examId, { versions: [...exam.versions, version] });
+}
+
 // ─── Generation jobs ───────────────────────────────────────────────────────
 
 export async function listGenerationJobs(): Promise<GenerationJob[]> {
@@ -641,6 +737,35 @@ export async function createGenerationJob(job: GenerationJob): Promise<Generatio
     return job;
   }
   const { data, error } = await requireClient().from('generation_jobs').insert(job).select().single();
+  if (error) throw error;
+  return data as GenerationJob;
+}
+
+export async function getGenerationJob(id: string): Promise<GenerationJob | null> {
+  if (isDemoMode || !supabase) {
+    return demoStore.generationJobs.find(job => job.id === id) ?? null;
+  }
+  const { data, error } = await requireClient().from('generation_jobs').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return (data as GenerationJob | null) ?? null;
+}
+
+export async function updateGenerationJob(
+  id: string,
+  patch: Partial<GenerationJob>,
+): Promise<GenerationJob> {
+  if (isDemoMode || !supabase) {
+    const idx = demoStore.generationJobs.findIndex(job => job.id === id);
+    if (idx < 0) throw new Error(`ไม่พบงานสร้างข้อสอบ ${id}`);
+    demoStore.generationJobs[idx] = { ...demoStore.generationJobs[idx], ...patch };
+    return demoStore.generationJobs[idx];
+  }
+  const { data, error } = await requireClient()
+    .from('generation_jobs')
+    .update(patch)
+    .eq('id', id)
+    .select()
+    .single();
   if (error) throw error;
   return data as GenerationJob;
 }
