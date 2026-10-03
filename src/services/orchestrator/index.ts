@@ -380,29 +380,9 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
 
 export const aiOrchestrator: AIOrchestrator = {
   async runGeneration(request) {
-    // Prefer server orchestration when available
-    if (!isDemoMode) {
-      try {
-        const { ok, data } = await invokeEdgeFunction<GenerationV2Result>('exam-engine', {
-          action: 'orchestrate',
-          request,
-        });
-        if (ok && data.success) return data;
-        if (data?.insufficientEvidence) return data;
-        if (data && !data.demoMode && data.error) {
-          return {
-            success: false,
-            status: 'failed',
-            mode: request.mode,
-            executionId: data.executionId || `exec-failed-${Date.now()}`,
-            questions: [],
-            error: data.error,
-          };
-        }
-      } catch {
-        // local pipeline fallback
-      }
-    }
+    // Always run the local pipeline first so retrieve → analyze → generate
+    // carries a real evidence pack into the edge generate call.
+    // (Calling edge `orchestrate` without evidence broke knowledge-bounded mode.)
     return runLocalPipeline(request);
   },
 
