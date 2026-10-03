@@ -1,35 +1,118 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Edit, Copy, FileText, AlertCircle, CheckCircle2, XCircle, Clock } from 'lucide-react';
-import { Card, PageHeader, Badge, EmptyState, Spinner } from '../components/ui';
-import { getCourse, getQuestion, listReviews } from '../lib/api';
+import { Card, PageHeader, Badge, EmptyState, Spinner, Modal } from '../components/ui';
+import { duplicateQuestion, getCourse, getQuestion, listQuestionEditHistory, listReviews, saveQuestionEdit } from '../lib/api';
 import { formatDate, formatRelativeTime } from '../lib/utils';
+import { useAuth } from '../lib/auth';
+import { QuestionEditorForm } from '../components/questions/QuestionEditorForm';
 import { QUESTION_TYPE_LABELS, BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE } from '../types';
-import type { Course, Question, QuestionReview } from '../types';
+import type { Course, Question, QuestionEditHistory, QuestionReview } from '../types';
 
 export default function QuestionDetailPage() {
   const { questionId } = useParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [q, setQuestion] = useState<Question | null>(null);
+  const [draft, setDraft] = useState<Question | null>(null);
   const [course, setCourse] = useState<Course | null>(null);
   const [reviews, setReviews] = useState<QuestionReview[]>([]);
+  const [history, setHistory] = useState<QuestionEditHistory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const reload = async (id: string) => {
+    const question = await getQuestion(id);
+    setQuestion(question);
+    setDraft(question ? { ...question, choices: question.choices ? question.choices.map(c => ({ ...c })) : null, rubric: question.rubric ? structuredClone(question.rubric) : null } : null);
+    if (question) {
+      const [courseRow, reviewRows, historyRows] = await Promise.all([
+        getCourse(question.course_id),
+        listReviews(question.id),
+        listQuestionEditHistory(question.id),
+      ]);
+      setCourse(courseRow);
+      setReviews(reviewRows);
+      setHistory(historyRows);
+    }
+  };
+
   useEffect(() => {
     if (!questionId) { setLoading(false); return; }
-    getQuestion(questionId).then(async question => {
-      setQuestion(question);
-      if (question) {
-        const [courseRow, reviewRows] = await Promise.all([getCourse(question.course_id), listReviews(question.id)]);
-        setCourse(courseRow); setReviews(reviewRows);
-      }
-    }).finally(() => setLoading(false));
+    reload(questionId).finally(() => setLoading(false));
   }, [questionId]);
+
   if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   if (!q) return <EmptyState title="ไม่พบข้อสอบ" action={<Link to="/question-bank" className="btn-primary">กลับ</Link>} />;
+
+  const saveEdit = async () => {
+    if (!draft || !user) return;
+    setSaving(true); setMessage(null);
+    try {
+      await saveQuestionEdit({
+        questionId: q.id,
+        editedBy: user.id,
+        editorName: user.full_name,
+        changeSummary: 'แก้ไขข้อสอบจากหน้ารายละเอียด',
+        source: 'editor',
+        patch: {
+          question_text: draft.question_text,
+          choices: draft.choices,
+          correct_answer: draft.correct_answer,
+          explanation: draft.explanation,
+          rubric: draft.rubric,
+          topic: draft.topic,
+          tags: draft.tags,
+        },
+      });
+      await reload(q.id);
+      setEditing(false);
+      setMessage('บันทึกการแก้ไขแล้ว');
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'บันทึกไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDuplicate = async () => {
+    if (!user) return;
+    const copy = await duplicateQuestion(q.id, user.id);
+    navigate(`/questions/${copy.id}`);
+  };
 
   return (
     <div>
       <Link to="/question-bank" className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-700 mb-4"><ArrowLeft className="w-4 h-4" /> กลับ</Link>
-      <PageHeader title="รายละเอียดข้อสอบ" description={`${course?.course_code || ''} • ${QUESTION_TYPE_LABELS[q.question_type]}`} actions={<div className="flex gap-2"><button className="btn-secondary"><Edit className="w-4 h-4" /> แก้ไข</button><button className="btn-secondary"><Copy className="w-4 h-4" /> ทำสำเนา</button></div>} />
+      <PageHeader
+        title="รายละเอียดข้อสอบ"
+        description={`${course?.course_code || ''} • ${QUESTION_TYPE_LABELS[q.question_type]}`}
+        actions={
+          <div className="flex gap-2">
+            <button className="btn-secondary" onClick={() => { setDraft(q); setEditing(true); }}><Edit className="w-4 h-4" /> แก้ไข</button>
+            <button className="btn-secondary" onClick={handleDuplicate}><Copy className="w-4 h-4" /> ทำสำเนา</button>
+          </div>
+        }
+      />
+      {message && <div className="mb-4 p-3 rounded-lg bg-primary-50 text-primary-700 text-sm">{message}</div>}
+
+      {(q.quality_flags.includes('duplicate') || q.quality_flags.includes('near_duplicate') || q.near_duplicate_of) && (
+        <Card className="p-4 mb-4 border border-warning-200 bg-warning-50">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-5 h-5 text-warning-600 mt-0.5" />
+            <div>
+              <p className="font-medium text-warning-800">คำเตือน: พบความซ้ำ/ใกล้เคียงในคลังข้อสอบ</p>
+              <p className="text-sm text-warning-700 mt-1">
+                {q.near_duplicate_of
+                  ? `อ้างอิงข้อ ${q.near_duplicate_of}${q.near_duplicate_score ? ` (ความคล้าย ${(Number(q.near_duplicate_score) * 100).toFixed(0)}%)` : ''}`
+                  : q.quality_flags.join(', ')}
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
@@ -95,6 +178,7 @@ export default function QuestionDetailPage() {
             <div className="space-y-2 text-sm">
               <div className="flex justify-between"><span className="text-neutral-500">รายวิชา</span><span className="font-medium">{course?.course_code}</span></div>
               <div className="flex justify-between"><span className="text-neutral-500">Topic</span><span className="font-medium">{q.topic}</span></div>
+              <div className="flex justify-between gap-2"><span className="text-neutral-500">แท็ก</span><span className="font-medium text-right">{(q.tags || []).join(', ') || '-'}</span></div>
               <div className="flex justify-between"><span className="text-neutral-500">CLO</span><span className="font-medium">{q.learning_outcome_codes.join(', ')}</span></div>
               <div className="flex justify-between"><span className="text-neutral-500">ภาษา</span><span className="font-medium">{q.language === 'th' ? 'ไทย' : 'English'}</span></div>
               <div className="flex justify-between"><span className="text-neutral-500">เวลาที่ใช้</span><span className="font-medium">{q.estimated_answer_time_minutes} นาที</span></div>
@@ -135,8 +219,39 @@ export default function QuestionDetailPage() {
               </div>
             </Card>
           )}
+
+          {history.length > 0 && (
+            <Card className="p-5">
+              <h3 className="font-semibold text-neutral-900 mb-3">ประวัติการแก้ไข</h3>
+              <div className="space-y-3">
+                {history.map(h => (
+                  <div key={h.id} className="p-3 rounded-lg bg-neutral-50">
+                    <p className="text-sm font-medium">{h.editor_name || h.edited_by}</p>
+                    <p className="text-xs text-neutral-500">{h.change_summary}</p>
+                    <p className="text-xs text-neutral-400 mt-1">{formatRelativeTime(h.created_at)}</p>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
         </div>
       </div>
+
+      <Modal open={editing && !!draft} onClose={() => !saving && setEditing(false)} title="แก้ไขข้อสอบ" size="xl">
+        {draft && (
+          <div className="space-y-4">
+            <QuestionEditorForm
+              question={draft}
+              disabled={saving}
+              onChange={patch => setDraft(prev => prev ? { ...prev, ...patch } : prev)}
+            />
+            <div className="flex justify-end gap-2">
+              <button className="btn-secondary" disabled={saving} onClick={() => setEditing(false)}>ยกเลิก</button>
+              <button className="btn-primary" disabled={saving} onClick={saveEdit}>{saving ? <Spinner size="sm" /> : 'บันทึก'}</button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

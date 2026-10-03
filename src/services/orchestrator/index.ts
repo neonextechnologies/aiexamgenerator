@@ -8,9 +8,10 @@ import { verificationEngine } from '../verification';
 import { analysisEngine } from '../workflows/analysis';
 import { workflowEngine } from '../workflows';
 import { DemoAIProvider } from '../../lib/ai-provider';
-import { insertQuestions, createGenerationJob, createUsageLog, createNotification } from '../../lib/api';
+import { insertQuestions, createGenerationJob, createUsageLog, createNotification, listQuestions } from '../../lib/api';
 import type { Question } from '../../types';
-import { simpleHash } from '../rules';
+import { contentHashForQuestion } from '../duplicates';
+import { ensureRubricForQuestion, normalizeRubric } from '../rubric';
 import { aiProviderService } from '../ai-providers';
 
 const DEMO_PROVIDERS: AIProviderConfig[] = [
@@ -181,12 +182,22 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
   let questionRows: Partial<Question>[] = generated.map((gq) => {
     const text = String(gq.questionText || gq.question_text || '');
     const choices = (gq.choices as Question['choices']) || null;
+    const qType = (gq.questionType || gq.question_type || request.questionType) as Question['question_type'];
+    const marks = Number(gq.marks || request.marksPerQuestion);
+    const normalized = normalizeRubric(gq.rubric, marks);
+    const rubric = ensureRubricForQuestion({
+      questionType: qType,
+      marks,
+      includeRubric: request.includeRubric || qType === 'essay' || qType === 'case_study',
+      rubric: normalized || (gq.rubric as Question['rubric']) || null,
+    });
     return {
       course_id: request.courseId,
-      question_type: (gq.questionType || gq.question_type || request.questionType) as Question['question_type'],
+      question_type: qType,
       question_text: text,
       language: request.language,
       topic: (gq.topic as string) || null,
+      tags: Array.isArray(gq.tags) ? (gq.tags as string[]) : [],
       choices,
       correct_answer: (gq.correctAnswer || gq.correct_answer || '') as string,
       explanation: String(gq.explanation || ''),
@@ -194,12 +205,12 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       ai_predicted_bloom_level: (gq.bloomLevel || request.bloomLevel) as Question['intended_bloom_level'],
       intended_difficulty: (gq.difficulty || request.difficulty) as Question['intended_difficulty'],
       ai_predicted_difficulty: (gq.difficulty || request.difficulty) as Question['intended_difficulty'],
-      marks: Number(gq.marks || request.marksPerQuestion),
+      marks,
       estimated_answer_time_minutes: Number(gq.estimatedAnswerTimeMinutes || 2),
       source_references: citation
         ? [{ document_id: citation.document_id, file_name: '', page: citation.page || 0, section: citation.section || '', quote: citation.quote }]
         : [],
-      rubric: (gq.rubric as Question['rubric']) || null,
+      rubric,
       learning_outcome_codes: (gq.learningOutcomeCodes as string[]) || request.learningOutcomeCodes || [],
       quality_flags: [],
       status: 'ai_generated',
@@ -207,36 +218,60 @@ async function runLocalPipeline(request: GenerationV2Request): Promise<Generatio
       created_by: request.createdBy,
       generated_by_ai: true,
       ai_model: usage.model,
+      content_hash: contentHashForQuestion(text),
     };
   });
 
+  const bankQuestions = await listQuestions({ courseId: request.courseId });
+  const bankHashes = bankQuestions.map(q => q.content_hash || contentHashForQuestion(q.question_text));
+
   // Verify + optional one correction pass (demo: drop failing duplicates)
-  let verifications = await verificationEngine.verifyBatch(questionRows, { evidencePack, knowledgeBounded });
+  let verifications = await verificationEngine.verifyBatch(questionRows, {
+    evidencePack,
+    knowledgeBounded,
+    bankQuestions,
+    existingHashes: bankHashes,
+  });
   const maxAttempts = 2;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const failedIdx = verifications.map((v, i) => (v.status === 'fail' ? i : -1)).filter(i => i >= 0);
     if (!failedIdx.length) break;
     // remove hard failures that are duplicates / missing text
     questionRows = questionRows.filter((_, i) => verifications[i].status !== 'fail' || !verifications[i].violations.includes('duplicate'));
-    verifications = await verificationEngine.verifyBatch(questionRows, { evidencePack, knowledgeBounded });
+    verifications = await verificationEngine.verifyBatch(questionRows, {
+      evidencePack,
+      knowledgeBounded,
+      bankQuestions,
+      existingHashes: bankHashes,
+    });
   }
 
   await workflowEngine.recordStep(runId, 'VERIFY', 'completed', { results: verifications });
 
   // Persist
   if (!savedQuestions.length) {
-    const toSave: Partial<Question>[] = questionRows.map((q, i) => ({
-      ...q,
-      status: verifications[i]?.status === 'fail' ? 'validation_failed' : 'ready_for_review',
-      quality_score: verifications[i]?.score ?? 80,
-      content_hash: simpleHash((q.question_text || '').toLowerCase()),
-      generation_mode: request.mode,
-      evidence_ids: evidencePack.retrievedChunks.slice(0, 3).map(c => c.id),
-      verification_status: verifications[i]?.status,
-      verification_score: verifications[i]?.score,
-      quality_dimensions: verifications[i]?.dimensions,
-      workflow_run_id: runId,
-    }));
+    const toSave: Partial<Question>[] = questionRows.map((q, i) => {
+      const dup = verifications[i]?.duplicateMatches?.[0];
+      const flags = [...(q.quality_flags || [])];
+      if (verifications[i]?.violations.includes('duplicate')) flags.push('duplicate');
+      if (verifications[i]?.violations.includes('near_duplicate')) flags.push('near_duplicate');
+      return {
+        ...q,
+        status: verifications[i]?.status === 'fail' ? 'validation_failed' : 'ready_for_review',
+        quality_score: verifications[i]?.score ?? 80,
+        content_hash: contentHashForQuestion(q.question_text || ''),
+        near_duplicate_of: dup?.questionId || null,
+        near_duplicate_score: dup?.score ?? null,
+        duplicate_matches: verifications[i]?.duplicateMatches || null,
+        quality_flags: flags,
+        generation_mode: request.mode,
+        evidence_ids: evidencePack.retrievedChunks.slice(0, 3).map(c => c.id),
+        verification_status: verifications[i]?.status,
+        verification_score: verifications[i]?.score,
+        quality_dimensions: verifications[i]?.dimensions,
+        workflow_run_id: runId,
+      };
+    });
     savedQuestions = await insertQuestions(toSave);
   } else {
     // mark ready for review when possible

@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { FileText, Plus, ArrowLeft, Target, Settings, Upload, Trash2, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Card, Tabs, Badge, PageHeader, EmptyState, Modal, Spinner } from '../components/ui';
-import { getCourse, listLearningOutcomes, listBlueprints, listQuestions, listExams } from '../lib/api';
+import { createBlueprint, createLearningOutcome, getCourse, listLearningOutcomes, listBlueprints, listQuestions, listExams } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fetchCourseDocuments, uploadCourseDocument, deleteCourseDocument } from '../lib/documents';
 import { formatDate, formatBytes, truncate } from '../lib/utils';
-import { BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_TYPE_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE } from '../types';
-import type { Course, Document as DocType, LearningOutcome, TestBlueprint, Question, Exam } from '../types';
+import { BLOOM_LABELS, DIFFICULTY_LABELS, QUESTION_TYPE_LABELS, QUESTION_STATUS_LABELS, QUESTION_STATUS_BADGE, EXAM_TYPE_LABELS } from '../types';
+import type { BloomLevel, Course, DifficultyLevel, Document as DocType, ExamType, LearningOutcome, QuestionType, TestBlueprint, Question, Exam } from '../types';
 
 export default function CourseDetailPage() {
   const { courseId } = useParams();
@@ -26,6 +26,37 @@ export default function CourseDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [docToDelete, setDocToDelete] = useState<DocType | null>(null);
+  const [cloOpen, setCloOpen] = useState(false);
+  const [bpOpen, setBpOpen] = useState(false);
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [cloForm, setCloForm] = useState({ code: '', title: '', description: '', outcome_type: 'CLO' as LearningOutcome['outcome_type'], bloom_level: 'understand' as BloomLevel, weight: 10 });
+  const [bpForm, setBpForm] = useState({
+    name: '',
+    exam_type: 'midterm' as ExamType,
+    duration_minutes: 60,
+    instructions: '',
+    topic: '',
+    clo_code: 'CLO1',
+    bloom: 'understand' as BloomLevel,
+    difficulty: 'medium' as DifficultyLevel,
+    question_type: 'multiple_choice_single' as QuestionType,
+    num_questions: 5,
+    marks_per_question: 1,
+  });
+
+  const reloadCourseData = useCallback(async () => {
+    if (!courseId) return;
+    const [courseRow, outcomeRows, blueprintRows, questionRows, examRows, documentRows] = await Promise.all([
+      getCourse(courseId),
+      listLearningOutcomes(courseId),
+      listBlueprints(courseId),
+      listQuestions({ courseId }),
+      listExams(courseId),
+      fetchCourseDocuments(courseId),
+    ]);
+    setCourse(courseRow); setClos(outcomeRows); setBlueprints(blueprintRows); setQuestions(questionRows); setExams(examRows); setDocs(documentRows);
+  }, [courseId]);
 
   const loadDocs = useCallback(async () => {
     if (!courseId) return;
@@ -35,19 +66,9 @@ export default function CourseDetailPage() {
   useEffect(() => {
     let active = true;
     if (!courseId) { setLoading(false); return; }
-    Promise.all([
-      getCourse(courseId),
-      listLearningOutcomes(courseId),
-      listBlueprints(courseId),
-      listQuestions({ courseId }),
-      listExams(courseId),
-      fetchCourseDocuments(courseId),
-    ]).then(([courseRow, outcomeRows, blueprintRows, questionRows, examRows, documentRows]) => {
-      if (!active) return;
-      setCourse(courseRow); setClos(outcomeRows); setBlueprints(blueprintRows); setQuestions(questionRows); setExams(examRows); setDocs(documentRows);
-    }).finally(() => { if (active) setLoading(false); });
+    reloadCourseData().finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [courseId]);
+  }, [courseId, reloadCourseData]);
 
   if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
   if (!course) return <EmptyState title="ไม่พบรายวิชา" action={<Link to="/courses" className="btn-primary">กลับ</Link>} />;
@@ -112,14 +133,14 @@ export default function CourseDetailPage() {
         )}
         {tab === 'outcomes' && (
           <div>
-            <div className="flex justify-end mb-4"><button className="btn-primary"><Plus className="w-4 h-4" /> เพิ่ม CLO</button></div>
+            <div className="flex justify-end mb-4"><button className="btn-primary" onClick={() => { setCloOpen(true); setMetaError(null); }}><Plus className="w-4 h-4" /> เพิ่ม CLO</button></div>
             <div className="space-y-3">
               {clos.map(lo => (
                 <Card key={lo.id} className="p-4">
                   <div className="flex items-start gap-3">
                     <div className="w-10 h-10 rounded-lg bg-primary-100 flex items-center justify-center flex-shrink-0"><Target className="w-5 h-5 text-primary-600" /></div>
                     <div className="flex-1">
-                      <div className="flex items-center gap-2"><span className="font-mono text-sm font-semibold text-primary-600">{lo.code}</span><Badge variant="primary">{BLOOM_LABELS[lo.bloom_level || 'remember']}</Badge><Badge variant="neutral">{lo.weight}%</Badge></div>
+                      <div className="flex items-center gap-2"><span className="font-mono text-sm font-semibold text-primary-600">{lo.code}</span><Badge variant="primary">{BLOOM_LABELS[lo.bloom_level || 'remember']}</Badge><Badge variant="neutral">{lo.weight}%</Badge><Badge variant="neutral">{lo.outcome_type}</Badge></div>
                       <p className="text-sm font-medium text-neutral-900 mt-1">{lo.title}</p>
                       <p className="text-sm text-neutral-500 mt-1">{lo.description}</p>
                     </div>
@@ -160,12 +181,12 @@ export default function CourseDetailPage() {
         )}
         {tab === 'blueprints' && (
           <div>
-            <div className="flex justify-end mb-4"><button className="btn-primary"><Plus className="w-4 h-4" /> สร้าง Blueprint</button></div>
+            <div className="flex justify-end mb-4"><button className="btn-primary" onClick={() => { setBpOpen(true); setMetaError(null); setBpForm(f => ({ ...f, clo_code: clos[0]?.code || 'CLO1' })); }}><Plus className="w-4 h-4" /> สร้าง Blueprint</button></div>
             <div className="space-y-3">
               {blueprints.map(bp => (
                 <Card key={bp.id} className="p-5">
                   <div className="flex items-center justify-between mb-3">
-                    <div><h3 className="font-semibold text-neutral-900">{bp.name}</h3><p className="text-xs text-neutral-400">{bp.total_questions} ข้อ • {bp.total_marks} คะแนน • {bp.duration_minutes} นาที</p></div>
+                    <div><h3 className="font-semibold text-neutral-900">{bp.name}</h3><p className="text-xs text-neutral-400">{bp.total_questions} ข้อ • {bp.total_marks} คะแนน • {bp.duration_minutes} นาที • {EXAM_TYPE_LABELS[bp.exam_type]}</p></div>
                     <Badge variant="success">{bp.status}</Badge>
                   </div>
                   <div className="overflow-x-auto">
@@ -244,6 +265,104 @@ export default function CourseDetailPage() {
         <div className="flex justify-end gap-2 pt-4">
           <button onClick={() => setDocToDelete(null)} className="btn-secondary">ยกเลิก</button>
           <button onClick={handleDelete} className="btn-primary bg-error-600 hover:bg-error-700">ลบ</button>
+        </div>
+      </Modal>
+
+      <Modal open={cloOpen} onClose={() => !savingMeta && setCloOpen(false)} title="เพิ่ม Learning Outcome">
+        <div className="space-y-3">
+          <div className="grid md:grid-cols-2 gap-3">
+            <div><label className="label">รหัส</label><input className="input" value={cloForm.code} onChange={e => setCloForm({ ...cloForm, code: e.target.value })} placeholder="CLO4" /></div>
+            <div>
+              <label className="label">ประเภท</label>
+              <select className="input" value={cloForm.outcome_type} onChange={e => setCloForm({ ...cloForm, outcome_type: e.target.value as LearningOutcome['outcome_type'] })}>
+                <option value="CLO">CLO</option>
+                <option value="LO">LO</option>
+                <option value="PLO">PLO</option>
+                <option value="topic">topic</option>
+              </select>
+            </div>
+          </div>
+          <div><label className="label">ชื่อ</label><input className="input" value={cloForm.title} onChange={e => setCloForm({ ...cloForm, title: e.target.value })} /></div>
+          <div><label className="label">คำอธิบาย</label><textarea className="input min-h-20" value={cloForm.description} onChange={e => setCloForm({ ...cloForm, description: e.target.value })} /></div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div><label className="label">Bloom</label><select className="input" value={cloForm.bloom_level} onChange={e => setCloForm({ ...cloForm, bloom_level: e.target.value as BloomLevel })}>{Object.entries(BLOOM_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+            <div><label className="label">น้ำหนัก (%)</label><input className="input" type="number" value={cloForm.weight} onChange={e => setCloForm({ ...cloForm, weight: Number(e.target.value) || 0 })} /></div>
+          </div>
+          {metaError && <p className="text-sm text-error-600">{metaError}</p>}
+          <div className="flex justify-end gap-2">
+            <button className="btn-secondary" disabled={savingMeta} onClick={() => setCloOpen(false)}>ยกเลิก</button>
+            <button className="btn-primary" disabled={savingMeta} onClick={async () => {
+              if (!courseId || !cloForm.code.trim() || !cloForm.title.trim()) { setMetaError('กรุณากรอกรหัสและชื่อ'); return; }
+              setSavingMeta(true); setMetaError(null);
+              try {
+                await createLearningOutcome({ course_id: courseId, ...cloForm });
+                setCloOpen(false);
+                setCloForm({ code: '', title: '', description: '', outcome_type: 'CLO', bloom_level: 'understand', weight: 10 });
+                await reloadCourseData();
+              } catch (err) {
+                setMetaError(err instanceof Error ? err.message : 'บันทึกไม่สำเร็จ');
+              } finally {
+                setSavingMeta(false);
+              }
+            }}>{savingMeta ? <Spinner size="sm" /> : 'บันทึก'}</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={bpOpen} onClose={() => !savingMeta && setBpOpen(false)} title="สร้าง Blueprint" size="lg">
+        <div className="space-y-3">
+          <div><label className="label">ชื่อ Blueprint</label><input className="input" value={bpForm.name} onChange={e => setBpForm({ ...bpForm, name: e.target.value })} /></div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div><label className="label">ประเภทสอบ</label><select className="input" value={bpForm.exam_type} onChange={e => setBpForm({ ...bpForm, exam_type: e.target.value as ExamType })}>{Object.entries(EXAM_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+            <div><label className="label">เวลา (นาที)</label><input className="input" type="number" value={bpForm.duration_minutes} onChange={e => setBpForm({ ...bpForm, duration_minutes: Number(e.target.value) || 0 })} /></div>
+          </div>
+          <div><label className="label">คำชี้แจง</label><textarea className="input min-h-16" value={bpForm.instructions} onChange={e => setBpForm({ ...bpForm, instructions: e.target.value })} /></div>
+          <div className="p-3 rounded-lg border border-neutral-200 space-y-3">
+            <p className="text-sm font-medium">แถว Blueprint แรก</p>
+            <div className="grid md:grid-cols-2 gap-3">
+              <div><label className="label">Topic</label><input className="input" value={bpForm.topic} onChange={e => setBpForm({ ...bpForm, topic: e.target.value })} /></div>
+              <div><label className="label">CLO</label><select className="input" value={bpForm.clo_code} onChange={e => setBpForm({ ...bpForm, clo_code: e.target.value })}>{clos.map(lo => <option key={lo.id} value={lo.code}>{lo.code}</option>)}{!clos.length && <option value="CLO1">CLO1</option>}</select></div>
+              <div><label className="label">Bloom</label><select className="input" value={bpForm.bloom} onChange={e => setBpForm({ ...bpForm, bloom: e.target.value as BloomLevel })}>{Object.entries(BLOOM_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+              <div><label className="label">Difficulty</label><select className="input" value={bpForm.difficulty} onChange={e => setBpForm({ ...bpForm, difficulty: e.target.value as DifficultyLevel })}>{Object.entries(DIFFICULTY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+              <div><label className="label">ประเภทข้อสอบ</label><select className="input" value={bpForm.question_type} onChange={e => setBpForm({ ...bpForm, question_type: e.target.value as QuestionType })}>{Object.entries(QUESTION_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><label className="label">จำนวนข้อ</label><input className="input" type="number" value={bpForm.num_questions} onChange={e => setBpForm({ ...bpForm, num_questions: Number(e.target.value) || 0 })} /></div>
+                <div><label className="label">คะแนน/ข้อ</label><input className="input" type="number" value={bpForm.marks_per_question} onChange={e => setBpForm({ ...bpForm, marks_per_question: Number(e.target.value) || 0 })} /></div>
+              </div>
+            </div>
+          </div>
+          {metaError && <p className="text-sm text-error-600">{metaError}</p>}
+          <div className="flex justify-end gap-2">
+            <button className="btn-secondary" disabled={savingMeta} onClick={() => setBpOpen(false)}>ยกเลิก</button>
+            <button className="btn-primary" disabled={savingMeta} onClick={async () => {
+              if (!courseId || !bpForm.name.trim() || !bpForm.topic.trim()) { setMetaError('กรุณากรอกชื่อและหัวข้อ'); return; }
+              setSavingMeta(true); setMetaError(null);
+              try {
+                await createBlueprint({
+                  course_id: courseId,
+                  name: bpForm.name,
+                  exam_type: bpForm.exam_type,
+                  duration_minutes: bpForm.duration_minutes,
+                  instructions: bpForm.instructions,
+                  rows: [{
+                    topic: bpForm.topic,
+                    clo_code: bpForm.clo_code,
+                    bloom: bpForm.bloom,
+                    difficulty: bpForm.difficulty,
+                    question_type: bpForm.question_type,
+                    num_questions: bpForm.num_questions,
+                    marks_per_question: bpForm.marks_per_question,
+                  }],
+                });
+                setBpOpen(false);
+                await reloadCourseData();
+              } catch (err) {
+                setMetaError(err instanceof Error ? err.message : 'บันทึกไม่สำเร็จ');
+              } finally {
+                setSavingMeta(false);
+              }
+            }}>{savingMeta ? <Spinner size="sm" /> : 'สร้าง Blueprint'}</button>
+          </div>
         </div>
       </Modal>
     </div>

@@ -1,5 +1,11 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { corsHeaders, handleOptions, jsonResponse, requireUser } from "../_shared/auth.ts";
+import {
+  detectDocumentKind,
+  extractDocxText,
+  extractPdfText,
+  normalizeExtractedText,
+} from "../../../src/services/documents/extract-text.ts";
 
 Deno.serve(async (req: Request) => {
   const opt = handleOptions(req);
@@ -38,74 +44,25 @@ Deno.serve(async (req: Request) => {
 
     const name = fileName || filePath.split("/").pop() || "file";
     const type = fileType || "";
+    const kind = detectDocumentKind(name, type);
+    const bytes = new Uint8Array(await fileData.arrayBuffer());
     let extractedText = "";
 
-    if (type.includes("text/plain") || type.includes("text/markdown") || name.endsWith(".txt") || name.endsWith(".md")) {
-      extractedText = await fileData.text();
-    } else if (type.includes("application/pdf") || name.endsWith(".pdf")) {
-      const arrayBuffer = await fileData.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      // Prefer utf-8 decode of stream objects; fall back to latin1 scan for older PDFs
-      let rawText = "";
-      try {
-        rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-      } catch {
-        rawText = new TextDecoder("latin1").decode(bytes);
-      }
-      const textChunks: string[] = [];
-      const regex = /BT\s*([\s\S]*?)\s*ET/g;
-      let match;
-      while ((match = regex.exec(rawText)) !== null) {
-        const block = match[1];
-        const textRegex = /\(([^\\()]*(?:\\.[^\\()]*)*)\)\s*Tj|\[([\s\S]*?)\]\s*TJ/g;
-        let textMatch;
-        while ((textMatch = textRegex.exec(block)) !== null) {
-          const text = textMatch[1] || textMatch[2] || "";
-          if (text) {
-            textChunks.push(
-              text
-                .replace(/\\n/g, "\n")
-                .replace(/\\r/g, "\r")
-                .replace(/\\t/g, "\t")
-                .replace(/\\\(/g, "(")
-                .replace(/\\\)/g, ")")
-                .replace(/\\\\/g, "\\")
-                .replace(/^\((.*)\)$/, "$1"),
-            );
-          }
-        }
-      }
-      extractedText = textChunks.join(" ").replace(/\s+/g, " ").trim();
-      if (!extractedText) {
-        const readable = rawText.match(/[\x20-\x7E\u0E00-\u0E7F]{4,}/g);
-        if (readable) extractedText = readable.join(" ").trim();
-      }
-    } else if (type.includes("application/vnd.openxmlformats") || name.endsWith(".docx")) {
-      const arrayBuffer = await fileData.arrayBuffer();
-      const rawText = new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(arrayBuffer));
-      const textRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
-      const textChunks: string[] = [];
-      let match;
-      while ((match = textRegex.exec(rawText)) !== null) {
-        if (match[1]) textChunks.push(match[1]);
-      }
-      extractedText = textChunks.join(" ").trim();
-      if (!extractedText) {
-        const readable = rawText.match(/[\x20-\x7E\u0E00-\u0E7F]{10,}/g);
-        if (readable) extractedText = readable.join(" ").trim();
-      }
+    if (kind === "txt" || kind === "md") {
+      extractedText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    } else if (kind === "pdf") {
+      extractedText = await extractPdfText(bytes);
+    } else if (kind === "docx") {
+      extractedText = await extractDocxText(bytes);
     } else {
       try {
-        extractedText = await fileData.text();
+        extractedText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
       } catch {
         extractedText = "";
       }
     }
 
-    extractedText = extractedText.replace(/\x00/g, "").trim();
-    if (extractedText.length > 50000) {
-      extractedText = extractedText.slice(0, 50000) + "\n...[truncated]";
-    }
+    extractedText = normalizeExtractedText(extractedText);
 
     if (!extractedText) {
       await supabase
@@ -114,6 +71,7 @@ Deno.serve(async (req: Request) => {
         .eq("id", documentId);
       return jsonResponse({
         error: "Could not extract text from file. For PDF/DOCX, ensure the file contains selectable text (not scanned images).",
+        kind,
       }, 422);
     }
 
@@ -133,6 +91,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({
       success: true,
       documentId,
+      kind,
       extractedTextPreview: extractedText.slice(0, 500),
       extractedTextLength: extractedText.length,
     });

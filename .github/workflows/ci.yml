@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, cursor/providers-email-ci-356b]
   pull_request:
-    branches: [main]
+    branches: [main, cursor/providers-email-ci-356b]
 
 jobs:
   verify:

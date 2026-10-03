@@ -32,8 +32,16 @@ export interface Question {
   generation_mode?: 'manual'|'hybrid'|'ai' | null; tags?: string[]; notes?: string | null;
   evidence_ids?: string[]; verification_status?: string | null; verification_score?: number | null;
   quality_dimensions?: Record<string, number> | null; workflow_run_id?: string | null; content_hash?: string | null;
+  near_duplicate_of?: string | null; near_duplicate_score?: number | null;
+  duplicate_matches?: Array<{ questionId: string; kind: 'exact' | 'near'; score: number; questionText?: string }> | null;
   approved_by?: string | null; approved_at?: string | null; created_at: string; updated_at: string;
   used_count: number; first_used_at?: string | null; last_used_at?: string | null; exposure_level: ExposureLevel;
+}
+export interface CourseTag { id: string; course_id: string; name: string; color?: string | null; created_at: string; }
+export interface QuestionEditHistory {
+  id: string; question_id: string; edited_by: string; editor_name?: string | null;
+  change_summary: string; before_json?: Partial<Question> | null; after_json?: Partial<Question> | null;
+  source: 'editor' | 'review' | 'system'; created_at: string;
 }
 export interface ExamQuestion { question_id: string; order: number; marks: number; }
 export interface ExamVersion { version_label: string; questions: ExamQuestion[]; shuffle_questions: boolean; shuffle_choices: boolean; }

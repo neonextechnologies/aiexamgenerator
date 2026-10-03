@@ -9,3 +9,7 @@ export { analysisEngine, analyzeGenerationRequest } from './workflows/analysis';
 export { chatAssistant } from './chat';
 export { notificationService, demoEmailProvider } from './notifications';
 export { getEmailProvider, getEmailStatus } from './email';
+export { contentHashForQuestion, findDuplicateMatches, trigramSimilarity } from './duplicates';
+export { buildDefaultEssayRubric, ensureRubricForQuestion, normalizeRubric } from './rubric';
+export { extractDocumentText, extractDocxText, extractPdfText } from './documents/extract-text';
+export { downloadExamExport, buildExamPreviewHtml } from './export/exam-export';

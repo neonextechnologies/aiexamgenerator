@@ -1,7 +1,7 @@
 import type { EvidencePack, VerificationResult, VerificationCheck } from '../../types/v2';
 import type { Question } from '../../types';
 import type { VerificationEngine } from '../types';
-import { simpleHash } from '../rules';
+import { contentHashForQuestion, findDuplicateMatches, type DuplicateCandidate } from '../duplicates';
 
 function scoreFromChecks(checks: VerificationCheck[]): { status: VerificationResult['status']; score: number } {
   if (checks.some(c => c.status === 'fail')) return { status: 'fail', score: Math.max(0, 40 - checks.filter(c => c.status === 'fail').length * 10) };
@@ -11,7 +11,14 @@ function scoreFromChecks(checks: VerificationCheck[]): { status: VerificationRes
 
 export function verifyQuestionDeterministic(
   question: Partial<Question>,
-  ctx: { evidencePack?: EvidencePack | null; knowledgeBounded: boolean; existingHashes?: string[] },
+  ctx: {
+    evidencePack?: EvidencePack | null;
+    knowledgeBounded: boolean;
+    existingHashes?: string[];
+    bankQuestions?: DuplicateCandidate[];
+    excludeId?: string;
+    nearThreshold?: number;
+  },
 ): VerificationResult {
   const checks: VerificationCheck[] = [];
   const violations: string[] = [];
@@ -66,10 +73,41 @@ export function verifyQuestionDeterministic(
     if (!hasEvidence) violations.push('insufficient_evidence');
   }
 
-  const hash = simpleHash((question.question_text || '').trim().toLowerCase());
-  if (ctx.existingHashes?.includes(hash)) {
-    checks.push({ code: 'DUPLICATE', name: 'ตรวจซ้ำ', status: 'fail', deterministic: true, message: 'ซ้ำกับคำถามที่มีอยู่' });
+  const hash = contentHashForQuestion(question.question_text || '');
+  const bank = ctx.bankQuestions || [];
+  const matches = question.question_text
+    ? findDuplicateMatches(question.question_text, bank, {
+      excludeId: ctx.excludeId || question.id,
+      nearThreshold: ctx.nearThreshold ?? 0.82,
+      courseId: question.course_id,
+    })
+    : [];
+
+  const exactFromHashList = Boolean(ctx.existingHashes?.includes(hash));
+  const exact = exactFromHashList || matches.some(m => m.kind === 'exact');
+  const near = matches.find(m => m.kind === 'near');
+
+  if (exact) {
+    checks.push({
+      code: 'DUPLICATE',
+      name: 'ตรวจซ้ำ',
+      status: 'fail',
+      deterministic: true,
+      message: matches.find(m => m.kind === 'exact')
+        ? `ซ้ำกับคลังข้อสอบ (${matches.find(m => m.kind === 'exact')!.questionId})`
+        : 'ซ้ำกับคำถามที่มีอยู่',
+    });
     violations.push('duplicate');
+  } else if (near) {
+    checks.push({
+      code: 'NEAR_DUPLICATE',
+      name: 'ใกล้เคียงซ้ำ',
+      status: 'warning',
+      deterministic: true,
+      message: `คล้ายกับ ${near.questionId} (ความคล้าย ${(near.score * 100).toFixed(0)}%)`,
+    });
+    violations.push('near_duplicate');
+    recommendations.push('ตรวจสอบว่าคำถามไม่ซ้ำกับข้อที่มีในคลัง');
   } else {
     checks.push({ code: 'DUPLICATE', name: 'ตรวจซ้ำ', status: 'pass', deterministic: true, message: 'OK' });
   }
@@ -94,7 +132,20 @@ export function verifyQuestionDeterministic(
     traceability: (question.source_references?.length || 0) > 0 ? 90 : 40,
   };
 
-  return { status, score, checks, violations, recommendations, dimensions };
+  return {
+    status,
+    score,
+    checks,
+    violations,
+    recommendations,
+    dimensions,
+    duplicateMatches: matches.slice(0, 5).map(m => ({
+      questionId: m.questionId,
+      kind: m.kind,
+      score: m.score,
+      questionText: m.questionText.slice(0, 160),
+    })),
+  } as VerificationResult;
 }
 
 export const verificationEngine: VerificationEngine = {
@@ -103,9 +154,24 @@ export const verificationEngine: VerificationEngine = {
   },
   async verifyBatch(questions, ctx) {
     const hashes: string[] = [];
+    const batchAsBank: DuplicateCandidate[] = [];
+    const bank = [...(ctx.bankQuestions || [])];
     return questions.map(q => {
-      const result = verifyQuestionDeterministic(q, { ...ctx, existingHashes: [...hashes] });
-      hashes.push(simpleHash((q.question_text || '').trim().toLowerCase()));
+      const result = verifyQuestionDeterministic(q, {
+        ...ctx,
+        existingHashes: [...hashes, ...(ctx.existingHashes || [])],
+        bankQuestions: [...bank, ...batchAsBank],
+      });
+      const h = contentHashForQuestion(q.question_text || '');
+      hashes.push(h);
+      if (q.question_text) {
+        batchAsBank.push({
+          id: q.id || `batch-${batchAsBank.length}`,
+          question_text: q.question_text,
+          content_hash: h,
+          course_id: q.course_id,
+        });
+      }
       return result;
     });
   },
