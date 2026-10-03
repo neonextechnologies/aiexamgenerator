@@ -7,9 +7,27 @@ import {
   convertInchesToTwip,
 } from 'docx';
 import { jsPDF } from 'jspdf';
-import { saveAs } from 'file-saver';
 import type { Course, Exam, Question, Rubric } from '../../types';
 import { QUESTION_TYPE_LABELS } from '../../types';
+
+async function triggerDownload(blob: Blob, filename: string): Promise<void> {
+  const mod = await import('file-saver');
+  const saveAs = (mod as { saveAs?: (b: Blob, n: string) => void; default?: { saveAs?: (b: Blob, n: string) => void } }).saveAs
+    || (mod as { default?: (b: Blob, n: string) => void }).default
+    || (mod as { default?: { saveAs?: (b: Blob, n: string) => void } }).default?.saveAs;
+  if (typeof saveAs === 'function') {
+    saveAs(blob, filename);
+    return;
+  }
+  // Node / test fallback
+  if (typeof window === 'undefined') return;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export type ExportKind = 'exam' | 'answer_key';
 export type ExportFormat = 'docx' | 'pdf';
@@ -254,7 +272,7 @@ export async function downloadExamExport(
     ? await buildExamDocxBlob(input)
     : await buildExamPdfBlob(input);
   const filename = suggestExportFilename(input, format);
-  saveAs(blob, filename);
+  await triggerDownload(blob, filename);
   return { filename, blob };
 }
 
