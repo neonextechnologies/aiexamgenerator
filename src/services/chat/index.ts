@@ -35,13 +35,15 @@ export const chatAssistant: ChatAssistant = {
         const { ok, data } = await invokeEdgeFunction<{
           reply?: ChatMessage;
           proposedActions?: ProposedAction[];
-        }>('exam-engine', { action: 'chat', message, context });
+          modelBased?: boolean;
+          heuristicFallback?: boolean;
+        }>('exam-engine', { action: 'chat', message, context, providerId: context.providerId });
         if (ok && data.reply) {
           reply = { ...data.reply, created_at: new Date().toISOString() };
           proposedActions = data.proposedActions || [];
         }
       } catch {
-        // keep local reply
+        // keep local labeled fallback
       }
     } else if (/สร้าง|generate|10 ข้อ|ข้อสอบ/i.test(message)) {
       proposedActions = [{
@@ -73,6 +75,7 @@ export const chatAssistant: ChatAssistant = {
 
 function buildLocalReply(message: string, context: ChatContext): string {
   return [
+    '[Heuristic fallback — โหมดสาธิตหรือไม่มี LLM]',
     'ผู้ช่วยออกแบบข้อสอบ (Controlled Hybrid)',
     `หน้า: ${context.page || '-'} | รายวิชา: ${context.courseId || '-'}`,
     '',

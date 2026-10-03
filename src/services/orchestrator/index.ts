@@ -302,21 +302,48 @@ async function runLocalPipeline(
 
   await setJobStage(jobId, 'VERIFY', { model: usage.model }, onProgress);
 
-  // Map to question rows
+  // Map to question rows (rubric retry via edge before any static template)
   const citation = evidencePack.citations[0];
-  let questionRows: Partial<Question>[] = generated.map((gq) => {
+  const questionRows: Partial<Question>[] = [];
+  for (const gq of generated) {
     const text = String(gq.questionText || gq.question_text || '');
     const choices = (gq.choices as Question['choices']) || null;
     const qType = (gq.questionType || gq.question_type || request.questionType) as Question['question_type'];
     const marks = Number(gq.marks || request.marksPerQuestion);
-    const normalized = normalizeRubric(gq.rubric, marks);
-    const rubric = ensureRubricForQuestion({
-      questionType: qType,
-      marks,
-      includeRubric: request.includeRubric || qType === 'essay' || qType === 'case_study',
-      rubric: normalized || (gq.rubric as Question['rubric']) || null,
-    });
-    return {
+    let normalized = normalizeRubric(gq.rubric, marks);
+    const needsRubric = (request.includeRubric || qType === 'essay' || qType === 'case_study') && !normalized;
+    if (needsRubric && !isDemoMode) {
+      try {
+        const { ok, data } = await invokeEdgeFunction<{ success?: boolean; rubric?: unknown }>('exam-engine', {
+          action: 'rubric_retry',
+          questionText: text,
+          questionType: qType,
+          marks,
+          language: request.language,
+          courseId: request.courseId,
+          providerId: request.providerId,
+        });
+        if (ok && data.success && data.rubric) {
+          normalized = normalizeRubric(data.rubric, marks);
+        }
+      } catch {
+        // leave null — avoid silent static rubric in real mode when model retry fails
+      }
+    }
+    const rubric = normalized
+      || (isDemoMode
+        ? ensureRubricForQuestion({
+          questionType: qType,
+          marks,
+          includeRubric: request.includeRubric || qType === 'essay' || qType === 'case_study',
+          rubric: null,
+        })
+        : null);
+
+    const predictedBloom = (gq.predictedBloomLevel || gq.aiPredictedBloomLevel || gq.bloomLevel || request.bloomLevel) as Question['intended_bloom_level'];
+    const predictedDiff = (gq.predictedDifficulty || gq.aiPredictedDifficulty || gq.difficulty || request.difficulty) as Question['intended_difficulty'];
+
+    questionRows.push({
       course_id: request.courseId,
       question_type: qType,
       question_text: text,
@@ -327,9 +354,9 @@ async function runLocalPipeline(
       correct_answer: (gq.correctAnswer || gq.correct_answer || '') as string,
       explanation: String(gq.explanation || ''),
       intended_bloom_level: (gq.bloomLevel || gq.intended_bloom_level || request.bloomLevel) as Question['intended_bloom_level'],
-      ai_predicted_bloom_level: (gq.bloomLevel || request.bloomLevel) as Question['intended_bloom_level'],
+      ai_predicted_bloom_level: predictedBloom,
       intended_difficulty: (gq.difficulty || request.difficulty) as Question['intended_difficulty'],
-      ai_predicted_difficulty: (gq.difficulty || request.difficulty) as Question['intended_difficulty'],
+      ai_predicted_difficulty: predictedDiff,
       marks,
       estimated_answer_time_minutes: Number(gq.estimatedAnswerTimeMinutes || 2),
       source_references: citation
@@ -344,14 +371,15 @@ async function runLocalPipeline(
       generated_by_ai: true,
       ai_model: usage.model,
       content_hash: contentHashForQuestion(text),
-    };
-  });
+    });
+  }
 
+  let mutableQuestionRows = questionRows;
   const bankQuestions = await listQuestions({ courseId: request.courseId });
   const bankHashes = bankQuestions.map(q => q.content_hash || contentHashForQuestion(q.question_text));
 
   // Verify + optional one correction pass (demo: drop failing duplicates)
-  let verifications = await verificationEngine.verifyBatch(questionRows, {
+  let verifications = await verificationEngine.verifyBatch(mutableQuestionRows, {
     evidencePack,
     knowledgeBounded,
     bankQuestions,
@@ -362,8 +390,8 @@ async function runLocalPipeline(
     const failedIdx = verifications.map((v, i) => (v.status === 'fail' ? i : -1)).filter(i => i >= 0);
     if (!failedIdx.length) break;
     // remove hard failures that are duplicates / missing text
-    questionRows = questionRows.filter((_, i) => verifications[i].status !== 'fail' || !verifications[i].violations.includes('duplicate'));
-    verifications = await verificationEngine.verifyBatch(questionRows, {
+    mutableQuestionRows = mutableQuestionRows.filter((_, i) => verifications[i].status !== 'fail' || !verifications[i].violations.includes('duplicate'));
+    verifications = await verificationEngine.verifyBatch(mutableQuestionRows, {
       evidencePack,
       knowledgeBounded,
       bankQuestions,
@@ -375,7 +403,7 @@ async function runLocalPipeline(
 
   // Persist
   if (!savedQuestions.length) {
-    const toSave: Partial<Question>[] = questionRows.map((q, i) => {
+    const toSave: Partial<Question>[] = mutableQuestionRows.map((q, i) => {
       const dup = verifications[i]?.duplicateMatches?.[0];
       const flags = [...(q.quality_flags || [])];
       if (verifications[i]?.violations.includes('duplicate')) flags.push('duplicate');
