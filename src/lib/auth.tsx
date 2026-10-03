@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, type ReactNode } from '
 import type { Profile, UserRole } from '../types';
 import { isDemoMode, supabase } from './supabase';
 import { DEMO_PROFILES, demoStore } from './demo-data';
+import { mapAuthError } from './auth-errors';
 
 interface AuthContextValue {
   user: Profile | null;
@@ -105,77 +106,72 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signIn = async (email: string, password: string): Promise<{ error: string | null }> => {
-    setLoading(true);
-    try {
-      if (isDemoMode || !supabase) {
-        const profile = DEMO_PROFILES.find(p => p.email === email);
-        if (profile && (password === 'demo1234' || !password)) {
-          setUser(profile);
-          return { error: null };
-        }
-        if (profile && password !== 'demo1234') return { error: 'รหัสผ่านไม่ถูกต้อง' };
-        return { error: 'ไม่พบบัญชีที่ใช้อีเมลนี้' };
-      }
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) return { error: error.message };
-      if (data.user) {
-        const profile = await fetchProfile(data.user.id, {
-          email: data.user.email || '',
-          full_name: data.user.user_metadata?.full_name,
-          avatar_url: data.user.user_metadata?.avatar_url,
-          department: data.user.user_metadata?.department,
-          created_at: data.user.created_at,
-        });
+    // Do not toggle global `loading` — PublicRoute would unmount the form and drop errors.
+    if (isDemoMode || !supabase) {
+      const profile = DEMO_PROFILES.find(p => p.email === email);
+      if (profile && (password === 'demo1234' || !password)) {
         setUser(profile);
+        return { error: null };
       }
-      return { error: null };
-    } finally {
-      setLoading(false);
+      if (profile && password !== 'demo1234') return { error: 'รหัสผ่านไม่ถูกต้อง' };
+      return { error: 'ไม่พบบัญชีที่ใช้อีเมลนี้' };
     }
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { error: mapAuthError(error) };
+    if (data.user) {
+      const profile = await fetchProfile(data.user.id, {
+        email: data.user.email || '',
+        full_name: data.user.user_metadata?.full_name,
+        avatar_url: data.user.user_metadata?.avatar_url,
+        department: data.user.user_metadata?.department,
+        created_at: data.user.created_at,
+      });
+      setUser(profile);
+    }
+    return { error: null };
   };
 
   const signUp = async (email: string, password: string, fullName: string): Promise<{ error: string | null }> => {
-    setLoading(true);
-    try {
-      if (isDemoMode || !supabase) {
-        const newProfile: Profile = {
-          id: `u-${Date.now()}`,
-          email,
-          full_name: fullName,
-          role: 'instructor',
-          department: null,
-          created_at: new Date().toISOString(),
-        };
-        demoStore.profiles.push(newProfile);
-        setUser(newProfile);
-        return { error: null };
-      }
-      // Do not send role in user_metadata — DB trigger assigns instructor.
-      const { data, error } = await supabase.auth.signUp({
+    if (isDemoMode || !supabase) {
+      const newProfile: Profile = {
+        id: `u-${Date.now()}`,
         email,
-        password,
-        options: { data: { full_name: fullName } },
-      });
-      if (error) return { error: error.message };
-      if (data.user) {
-        // Fallback upsert without role (trigger owns role assignment / protection).
-        await supabase.from('profiles').upsert({
-          id: data.user.id,
-          email,
-          full_name: fullName,
-          department: null,
-        }, { onConflict: 'id' });
-        const profile = await fetchProfile(data.user.id, {
-          email,
-          full_name: fullName,
-          created_at: data.user.created_at || new Date().toISOString(),
-        });
-        setUser(profile);
-      }
+        full_name: fullName,
+        role: 'instructor',
+        department: null,
+        created_at: new Date().toISOString(),
+      };
+      demoStore.profiles.push(newProfile);
+      setUser(newProfile);
       return { error: null };
-    } finally {
-      setLoading(false);
     }
+    // Do not send role in user_metadata — DB trigger assigns instructor.
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: fullName } },
+    });
+    if (error) return { error: mapAuthError(error) };
+    // GoTrue may return a user with empty identities when signup is disabled.
+    if (!data.user || (Array.isArray(data.user.identities) && data.user.identities.length === 0 && !data.session)) {
+      return { error: mapAuthError({ message: 'Signups not allowed for this instance', code: 'signup_disabled' }) };
+    }
+    if (data.user) {
+      // Fallback upsert without role (trigger owns role assignment / protection).
+      await supabase.from('profiles').upsert({
+        id: data.user.id,
+        email,
+        full_name: fullName,
+        department: null,
+      }, { onConflict: 'id' });
+      const profile = await fetchProfile(data.user.id, {
+        email,
+        full_name: fullName,
+        created_at: data.user.created_at || new Date().toISOString(),
+      });
+      setUser(profile);
+    }
+    return { error: null };
   };
 
   const signOut = async () => {

@@ -2,24 +2,39 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Brain, Mail, Lock, User, ArrowRight } from 'lucide-react';
 import { useAuth } from '../lib/auth';
+import { isDemoMode } from '../lib/supabase';
 import { Spinner } from '../components/ui';
 
 export default function RegisterPage() {
-  const { signUp, loading } = useAuth();
+  const { signUp } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (password.length < 6) { setError('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร'); return; }
-    const { error } = await signUp(email, password, fullName);
-    if (error) setError(error);
-    else navigate('/dashboard');
+    if (password.length < 6) {
+      setError('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const { error: signUpError } = await signUp(email.trim(), password, fullName.trim());
+      if (signUpError) {
+        setError(signUpError);
+        return;
+      }
+      navigate('/dashboard');
+    } finally {
+      setSubmitting(false);
+    }
   };
+
+  const busy = submitting;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-accent-50 p-4">
@@ -31,6 +46,11 @@ export default function RegisterPage() {
         </div>
         <div className="bg-white rounded-xl shadow-lg border border-neutral-200 p-6">
           <h2 className="text-lg font-semibold text-neutral-900 mb-4">สมัครสมาชิก</h2>
+          {!isDemoMode && (
+            <p className="text-sm text-neutral-600 bg-neutral-50 border border-neutral-200 rounded-lg px-3 py-2 mb-4">
+              หากระบบปิดรับสมัคร คุณจะเห็นข้อความแจ้งเตือน — กรุณาติดต่อผู้ดูแลระบบเพื่อขอบัญชี
+            </p>
+          )}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="label">ชื่อ-นามสกุล</label>
@@ -53,8 +73,10 @@ export default function RegisterPage() {
                 <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="input pl-10" placeholder="อย่างน้อย 6 ตัวอักษร" required />
               </div>
             </div>
-            {error && <p className="text-sm text-error-600 bg-error-50 px-3 py-2 rounded-lg">{error}</p>}
-            <button type="submit" disabled={loading} className="btn-primary w-full">{loading ? <Spinner size="sm" /> : <>สมัครสมาชิก <ArrowRight className="w-4 h-4" /></>}</button>
+            {error && <p className="text-sm text-error-600 bg-error-50 px-3 py-2 rounded-lg" role="alert">{error}</p>}
+            <button type="submit" disabled={busy} className="btn-primary w-full">
+              {busy ? <Spinner size="sm" /> : <>สมัครสมาชิก <ArrowRight className="w-4 h-4" /></>}
+            </button>
           </form>
           <p className="text-center text-sm text-neutral-500 mt-4">มีบัญชีแล้ว? <Link to="/login" className="text-primary-600 font-medium hover:underline">เข้าสู่ระบบ</Link></p>
         </div>
