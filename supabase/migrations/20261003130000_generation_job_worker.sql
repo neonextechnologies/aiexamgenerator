@@ -139,7 +139,8 @@ $$;
 GRANT EXECUTE ON FUNCTION wake_generation_workers() TO service_role;
 
 -- Schedule every minute when pg_cron exists (idempotent).
-DO $$
+-- Use $do$ so the cron command body can use $$ without nesting conflicts.
+DO $do$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
     PERFORM cron.unschedule(jobid)
@@ -156,4 +157,4 @@ BEGIN
   END IF;
 EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE 'Could not schedule wake-generation-workers: %', SQLERRM;
-END $$;
+END $do$;

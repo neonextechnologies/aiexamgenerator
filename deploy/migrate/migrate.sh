@@ -51,11 +51,15 @@ for f in "${files[@]}"; do
 done
 
 # Configure pg_cron wake URL against internal Kong (idempotent).
+# Requires GRANT SET ON PARAMETER from deploy/db/999-app-settings-grants.sql (fresh volumes).
+# Tolerate permission denied on already-initialized volumes without the grant.
 if [ -n "$SERVICE_ROLE_KEY" ]; then
   echo "[migrate] configuring app.settings for generation worker wake"
-  psql -v ON_ERROR_STOP=1 -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+  if ! psql -v ON_ERROR_STOP=1 -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
     -c "ALTER DATABASE ${PGDATABASE} SET app.settings.supabase_url = '${KONG_INTERNAL_URL}';" \
-    -c "ALTER DATABASE ${PGDATABASE} SET app.settings.service_role_key = '${SERVICE_ROLE_KEY}';"
+    -c "ALTER DATABASE ${PGDATABASE} SET app.settings.service_role_key = '${SERVICE_ROLE_KEY}';"; then
+    echo "[migrate] WARN: could not ALTER DATABASE app.settings.* (permission denied?). Ensure deploy/db grants exist or set manually as supabase_admin." >&2
+  fi
 fi
 
 # Optional seed: only when DB has no auth users and SEED_DEMO_USERS=true.
