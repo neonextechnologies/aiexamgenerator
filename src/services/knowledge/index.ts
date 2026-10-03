@@ -2,6 +2,7 @@ import type { DocumentChunk, EvidencePack } from '../../types/v2';
 import type { KnowledgeProvider } from '../types';
 import { isDemoMode, supabase } from '../../lib/supabase';
 import { demoStore } from '../../lib/demo-data';
+import { invokeEdgeFunction } from '../../lib/edge';
 
 const demoChunks: DocumentChunk[] = [];
 
@@ -22,11 +23,28 @@ function lexicalScore(query: string, content: string): number {
   return hit / q.length;
 }
 
-export const knowledgeProvider: KnowledgeProvider = {
+export type KnowledgeHealth = {
+  ok: boolean;
+  mode: 'demo' | 'pgvector' | 'lexical' | 'unavailable';
+  message: string;
+  embeddedChunks?: number;
+  totalChunks?: number;
+};
+
+let lastHealth: KnowledgeHealth | null = null;
+
+export const knowledgeProvider: KnowledgeProvider & {
+  getLastHealth(): KnowledgeHealth | null;
+  healthDetails(): Promise<KnowledgeHealth>;
+  backfillEmbeddings(opts?: { documentIds?: string[]; limit?: number }): Promise<{ updated: number; errors: string[] }>;
+} = {
+  getLastHealth() {
+    return lastHealth;
+  },
+
   async ingestDocument(documentId, text, meta = {}) {
     const parts = chunkText(text);
     if (isDemoMode || !supabase) {
-      // remove old
       for (let i = demoChunks.length - 1; i >= 0; i--) if (demoChunks[i].document_id === documentId) demoChunks.splice(i, 1);
       parts.forEach((content, idx) => {
         demoChunks.push({
@@ -44,6 +62,17 @@ export const knowledgeProvider: KnowledgeProvider = {
         });
       });
       return { chunkCount: parts.length };
+    }
+
+    // Prefer edge ingest so embeddings are written server-side with provider keys.
+    try {
+      const { ok, data } = await invokeEdgeFunction<{ success?: boolean; chunkCount?: number; error?: string }>(
+        'exam-engine',
+        { action: 'ingest', documentId, text, courseId: meta.courseId || null, section: meta.section || null },
+      );
+      if (ok && data.success) return { chunkCount: data.chunkCount || parts.length };
+    } catch {
+      // fall through to client insert without embeddings
     }
 
     await supabase.from('document_chunks').delete().eq('document_id', documentId);
@@ -88,36 +117,57 @@ export const knowledgeProvider: KnowledgeProvider = {
 
   async retrieve(query, opts) {
     const topK = opts.topK ?? 8;
-    let chunks: DocumentChunk[] = [];
     if (isDemoMode || !supabase) {
-      chunks = demoChunks.filter(c => opts.documentIds.includes(c.document_id));
+      let chunks = demoChunks.filter(c => opts.documentIds.includes(c.document_id));
       if (!chunks.length) {
-        // bootstrap from demo documents
         for (const id of opts.documentIds) {
           const doc = demoStore.documents.find(d => d.id === id);
           if (doc) await this.ingestDocument(id, doc.extracted_text || `${doc.file_name} ${doc.description || ''}`, { courseId: doc.course_id });
         }
         chunks = demoChunks.filter(c => opts.documentIds.includes(c.document_id));
       }
-    } else {
-      const { data, error } = await supabase
-        .from('document_chunks')
-        .select('*')
-        .in('document_id', opts.documentIds)
-        .limit(200);
-      if (error) throw error;
-      chunks = (data || []) as DocumentChunk[];
-      if (!chunks.length) {
-        // fallback: chunk from documents.extracted_text on the fly
-        const { data: docs } = await supabase.from('documents').select('id, course_id, extracted_text, file_name').in('id', opts.documentIds);
-        for (const d of docs || []) {
-          if (d.extracted_text) await this.ingestDocument(d.id, d.extracted_text, { courseId: d.course_id });
-        }
-        const { data: again } = await supabase.from('document_chunks').select('*').in('document_id', opts.documentIds).limit(200);
-        chunks = (again || []) as DocumentChunk[];
-      }
+      return chunks
+        .map(c => ({ c, score: lexicalScore(query, c.content) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topK)
+        .map(x => x.c);
     }
 
+    // Semantic path via edge (embeds query + match_document_chunks)
+    try {
+      const { ok, data } = await invokeEdgeFunction<{
+        success?: boolean;
+        chunks?: DocumentChunk[];
+        mode?: string;
+      }>('exam-engine', {
+        action: 'retrieve',
+        query,
+        documentIds: opts.documentIds,
+        courseId: opts.courseId || null,
+        topK,
+      });
+      if (ok && data.success && Array.isArray(data.chunks) && data.chunks.length) {
+        return data.chunks;
+      }
+    } catch {
+      // lexical fallback below
+    }
+
+    const { data, error } = await supabase
+      .from('document_chunks')
+      .select('*')
+      .in('document_id', opts.documentIds)
+      .limit(200);
+    if (error) throw error;
+    let chunks = (data || []) as DocumentChunk[];
+    if (!chunks.length) {
+      const { data: docs } = await supabase.from('documents').select('id, course_id, extracted_text, file_name').in('id', opts.documentIds);
+      for (const d of docs || []) {
+        if (d.extracted_text) await this.ingestDocument(d.id, d.extracted_text, { courseId: d.course_id });
+      }
+      const { data: again } = await supabase.from('document_chunks').select('*').in('document_id', opts.documentIds).limit(200);
+      chunks = (again || []) as DocumentChunk[];
+    }
     return chunks
       .map(c => ({ c, score: lexicalScore(query, c.content) }))
       .sort((a, b) => b.score - a.score)
@@ -149,6 +199,48 @@ export const knowledgeProvider: KnowledgeProvider = {
   },
 
   async healthCheck() {
-    return true;
+    const details = await this.healthDetails();
+    return details.ok;
+  },
+
+  async healthDetails(): Promise<KnowledgeHealth> {
+    if (isDemoMode || !supabase) {
+      lastHealth = { ok: true, mode: 'demo', message: 'Lexical Demo Store (โหมดสาธิต)', totalChunks: demoChunks.length, embeddedChunks: 0 };
+      return lastHealth;
+    }
+    try {
+      const { ok, data } = await invokeEdgeFunction<{
+        ok?: boolean;
+        mode?: KnowledgeHealth['mode'];
+        message?: string;
+        embeddedChunks?: number;
+        totalChunks?: number;
+      }>('exam-engine', { action: 'knowledge_health' });
+      lastHealth = {
+        ok: Boolean(ok && data.ok),
+        mode: data.mode || 'unavailable',
+        message: data.message || 'ไม่ทราบสถานะ',
+        embeddedChunks: data.embeddedChunks,
+        totalChunks: data.totalChunks,
+      };
+      return lastHealth;
+    } catch (err) {
+      lastHealth = {
+        ok: false,
+        mode: 'unavailable',
+        message: err instanceof Error ? err.message : 'ตรวจสอบ Knowledge ไม่สำเร็จ',
+      };
+      return lastHealth;
+    }
+  },
+
+  async backfillEmbeddings(opts = {}) {
+    if (isDemoMode || !supabase) return { updated: 0, errors: ['โหมดสาธิตไม่รองรับ embeddings'] };
+    const { ok, data } = await invokeEdgeFunction<{ updated?: number; errors?: string[]; error?: string }>(
+      'exam-engine',
+      { action: 'backfill_embeddings', documentIds: opts.documentIds, limit: opts.limit ?? 100 },
+    );
+    if (!ok) return { updated: 0, errors: [data.error || 'backfill failed'] };
+    return { updated: data.updated || 0, errors: data.errors || [] };
   },
 };
