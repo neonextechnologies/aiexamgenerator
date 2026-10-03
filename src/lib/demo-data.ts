@@ -244,6 +244,7 @@ export const DEMO_GEN_JOB: GenerationJob = {
   question_type:'multiple_choice_single', bloom_level:'apply', difficulty:'medium', number_of_questions:5, language:'th', marks_per_question:1,
   include_explanation:true, include_rubric:false, status:'completed', generated_count:5, failed_count:0, total_questions:5,
   input_tokens:3500, output_tokens:4200, estimated_cost_usd:0.12, model:'gpt-4o', created_by:'u-inst', created_at:'2025-07-16T10:00:00Z', completed_at:'2025-07-16T10:05:00Z',
+  progress_pct: 100, current_stage: 'DONE', stage_message: 'เสร็จสิ้น', mode: 'hybrid', knowledge_bounded: true,
 };
 
 class DemoStore {

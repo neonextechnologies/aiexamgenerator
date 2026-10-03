@@ -110,8 +110,19 @@ export interface AnalysisEngine {
   analyze(request: GenerationV2Request, evidence: EvidencePack): Promise<AnalysisDecision>;
 }
 
+export interface GenerationProgressUpdate {
+  progressPct: number;
+  currentStage: string;
+  stageMessage?: string;
+  jobId?: string;
+  status?: string;
+}
+
 export interface AIOrchestrator {
-  runGeneration(request: GenerationV2Request): Promise<GenerationV2Result>;
+  runGeneration(
+    request: GenerationV2Request,
+    options?: { onProgress?: (update: GenerationProgressUpdate) => void },
+  ): Promise<GenerationV2Result>;
   listProviders(): Promise<AIProviderConfig[]>;
   listQuestionTypes(): Promise<QuestionTypeDef[]>;
   listDifficulties(): Promise<DifficultyDefinition[]>;

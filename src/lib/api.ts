@@ -741,6 +741,26 @@ export async function createGenerationJob(job: GenerationJob): Promise<Generatio
   return data as GenerationJob;
 }
 
+export async function updateGenerationJob(
+  id: string,
+  patch: Partial<GenerationJob>,
+): Promise<GenerationJob> {
+  if (isDemoMode || !supabase) {
+    const idx = demoStore.generationJobs.findIndex(job => job.id === id);
+    if (idx < 0) throw new Error(`ไม่พบงานสร้างข้อสอบ ${id}`);
+    demoStore.generationJobs[idx] = { ...demoStore.generationJobs[idx], ...patch };
+    return demoStore.generationJobs[idx];
+  }
+  const { data, error } = await requireClient()
+    .from('generation_jobs')
+    .update(patch)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as GenerationJob;
+}
+
 // ─── Notifications ─────────────────────────────────────────────────────────
 
 export async function listNotifications(userId?: string): Promise<Notification[]> {
